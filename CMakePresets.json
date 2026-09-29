@@ -1,0 +1,27 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-msvc",
+      "displayName": "FSRemote - Qt 6.11.1 MSVC 2022 x64",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/qtcreator-msvc",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.11.1/msvc2022_64"
+      },
+      "environment": {
+        "PATH": "C:/Qt/6.11.1/msvc2022_64/bin;$penv{PATH}"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "windows-msvc", "configuration": "Debug", "jobs": 4 },
+    { "name": "release", "configurePreset": "windows-msvc", "configuration": "Release", "jobs": 4 }
+  ],
+  "testPresets": [
+    { "name": "debug", "configurePreset": "windows-msvc", "configuration": "Debug", "output": { "outputOnFailure": true } },
+    { "name": "release", "configurePreset": "windows-msvc", "configuration": "Release", "output": { "outputOnFailure": true } }
+  ]
+}

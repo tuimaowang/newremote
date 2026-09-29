@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="/">
+    <file>app.ico</file>
+    <file>settings.svg</file>
+  </qresource>
+</RCC>
+
