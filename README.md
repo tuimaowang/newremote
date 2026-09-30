@@ -22,39 +22,19 @@
 
 本轮刻意不做远控、SSH、文件、离线消息、账号管理或自动更新。此前要求的更新能力仍属于后续初版计划，不在这个通信原型中实现。
 
-## 直接运行
+## 实际运行
 
-已构建时，在项目根目录双击 `Start-Demo.cmd`。
+在服务器电脑上双击项目根目录的 `Start-Server.cmd`。服务器固定监听 `0.0.0.0:62843`，并在 `%APPDATA%\FSRemote\FSRemoteMessages` 生成设备令牌和客户端配置。iKuai 将公网 `112.26.74.220:62843` 映射到服务器电脑 `192.168.3.63:62843`。
 
-也可以直接双击 `dist\FSRemoteMessageServer.exe`。不带 `--config` 时，服务器会在系统应用数据目录自动创建随机令牌和随机空闲端口，并生成 `client-device-a.json`、`client-device-b.json`。随后双击 `dist\FSRemoteMessages.exe`，客户端会自动读取 `device-a` 配置并连接，不需要手写 JSON。自动配置目录通常是 `%APPDATA%\FSRemote\FSRemoteMessages`。
+服务器为每台设备生成两个配置文件：`client-device-a.json` 使用公网地址，适合外网电脑；`client-device-a-lan.json` 使用 `192.168.3.63:62843`，适合同一局域网电脑。将对应配置复制到客户端程序目录，或使用 `FSRemoteMessages.exe --config <配置文件>` 启动。每台电脑必须使用不同设备 ID 和令牌。
 
-脚本会选择一个空闲本机端口，生成随机的独立设备令牌，启动一个隐藏的服务器和两个可交互的客户端。选中对方，输入文字后点击“发送”。关闭客户端窗口退出客户端；脚本输出的 `stop-demo.ps1 -Session ...` 可停止整组演示进程。
-
-也可以在 PowerShell 执行：
-
-```powershell
-.\scripts\start-demo.ps1
-```
-
-### 局域网自动配置测试
-
-不想手写服务器地址、端口或令牌时，在作为服务端的电脑执行：
-
-```powershell
-.\scripts\start-lan-demo.ps1
-```
-
-服务端会自动选择本机局域网 IPv4、随机空闲端口，并生成两个独立令牌。脚本会把配置导出到 `lan-demo-data\<session>`；将其中的 `client-device-a.json` 和 `client-device-b.json` 分别复制到各测试电脑的 `FSRemoteMessages.exe` 同目录，直接双击客户端即可连接。首次运行 Windows 防火墙可能需要允许程序访问“专用网络”。
-
-这是为了局域网联调提供的显式测试模式，使用未加密的 `ws://`，只应在可信的私有网络中使用；默认启动仍只监听本机回环地址。正式跨设备部署应改用 WSS 证书。
-
-单独打开 `dist\FSRemoteMessages.exe` 时，通过右上角设置填写服务器地址、设备 ID 和已有访问令牌。这不是注册入口，设备必须预先配置在服务器端。
+至少启动服务器和两个客户端，公共聊天室才有多端收发效果。客户端不再使用随机本机端口，也没有本机演示模式。当前公网测试使用明文 WS，长期公网使用前必须配置 WSS。
 
 ## 编译与验证
 
 ### Qt Creator
 
-本机 Qt Creator 配置使用 Qt 6.11.1 MSVC 2022 x64，包含 Debug / Release 和 `FSRemoteMessages`（客户端）、`FSRemoteMessageServer`（服务端）、`message_tests` 三个运行目标。打开根目录 `CMakeLists.txt` 即可使用，运行参数保持为空；本机自动配置测试时先启动服务端，再启动客户端。
+本机 Qt Creator 配置使用 Qt 6.11.1 MSVC 2022 x64，包含 Debug / Release 和 `FSRemoteMessages`（客户端）、`FSRemoteMessageServer`（服务端）、`message_tests` 三个运行目标。打开根目录 `CMakeLists.txt` 即可使用；实际运行时先启动服务端，再启动多个客户端。
 
 项目的 `CMakePresets.json` 固定当前机器的 Qt 路径，构建输出在 `build/qtcreator-msvc`。需要重新生成本机 IDE 设置时，关闭 Qt Creator 后执行 `scripts/configure-qtcreator.ps1`；脚本会备份并更新项目配置、注册本项目专用 Kit，保留其他 Kit。`.qtcreator` 中的个人设置及备份不纳入 Git。
 
@@ -90,7 +70,7 @@ Qt 界面 + MessageClient              Qt 界面 + MessageClient
 
 ## 服务器配置
 
-自动配置默认只绑定 `127.0.0.1`，适合本机测试。使用 `--lan` 或 `scripts/start-lan-demo.ps1` 时，软件会自动绑定局域网并生成客户端配置；该模式明确启用明文 WS，仅适合可信私有网络。正式跨设备部署应使用 WSS：服务器配置需要提供证书和私钥，客户端必须信任证书且主机名匹配。
+自动配置固定绑定 `0.0.0.0:62843`，并生成公网和局域网客户端配置。当前公网测试使用明文 WS；正式跨设备部署应使用 WSS，服务器配置需要提供证书和私钥，客户端必须信任证书且主机名匹配。
 
 启动命令：
 
@@ -102,8 +82,10 @@ Qt 界面 + MessageClient              Qt 界面 + MessageClient
 
 ```json
 {
-  "listen": "127.0.0.1",
-  "port": 17890,
+  "listen": "0.0.0.0",
+  "port": 62843,
+  "lan_address": "192.168.3.63",
+  "public_address": "112.26.74.220",
   "devices": [
     { "id": "device-a", "name": "Desktop A", "token": "<unique-random-token-at-least-32-characters>" },
     { "id": "device-b", "name": "Desktop B", "token": "<another-independent-random-token>" }
@@ -115,7 +97,7 @@ Qt 界面 + MessageClient              Qt 界面 + MessageClient
 
 ```json
 {
-  "server": "ws://127.0.0.1:17890",
+  "server": "ws://112.26.74.220:62843",
   "device_id": "device-a",
   "token": "<the-token-provisioned-for-device-a>"
 }

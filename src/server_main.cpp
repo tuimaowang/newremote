@@ -10,7 +10,6 @@
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QSaveFile>
-#include <QNetworkInterface>
 #include <QWebSocketServer>
 #include <cstring>
 #include <QSslCertificate>
@@ -31,12 +30,10 @@ int main(int argc, char** argv)
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"config", "Server JSON configuration file.", "path"});
-    parser.addOption({"lan", "Generate and serve an automatic plain-WebSocket LAN test configuration."});
     parser.process(app);
     QTextStream output(stdout);
     QTextStream error(stderr);
     const bool automatic = !parser.isSet("config");
-    const bool lanMode = parser.isSet("lan");
     QString configPath = parser.value("config");
     if (automatic) {
         const auto directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -44,7 +41,7 @@ int main(int argc, char** argv)
             error << "Cannot create automatic configuration directory.\n";
             return 1;
         }
-        configPath = QDir(directory).filePath(lanMode ? "lan-server.json" : "server.json");
+        configPath = QDir(directory).filePath("server.json"); // 实际部署只使用一个固定服务器配置。
         if (!QFile::exists(configPath)) {
             auto token = [] {
                 QByteArray bytes(32, Qt::Uninitialized);
@@ -56,8 +53,10 @@ int main(int argc, char** argv)
                 return QString::fromLatin1(bytes.toBase64());
             };
             const QJsonObject generated{
-                {"listen", lanMode ? "0.0.0.0" : "127.0.0.1"}, {"port", 0},
-                {"allow_insecure_lan", lanMode},
+                {"listen", "0.0.0.0"}, {"port", 62843}, // 固定 iKuai 映射端口，避免客户端拿到随机本机端口。
+                {"allow_insecure_lan", true}, // 当前公网测试仍使用明文 WS，正式部署再切换 WSS。
+                {"lan_address", "192.168.3.63"}, // 生成局域网客户端配置使用的服务器地址。
+                {"public_address", "112.26.74.220"}, // 生成公网客户端配置使用的服务器地址。
                 {"devices", QJsonArray{
                     QJsonObject{{"id", "device-a"}, {"name", "本机 A"}, {"token", token()}},
                     QJsonObject{{"id", "device-b"}, {"name", "本机 B"}, {"token", token()}}
@@ -69,6 +68,25 @@ int main(int argc, char** argv)
                 || !file.commit()) {
                 error << "Cannot write automatic configuration.\n";
                 return 1;
+            }
+        }
+        QFile existing(configPath); // 检查旧版随机端口配置，避免继续使用 127.0.0.1。
+        if (existing.open(QIODevice::ReadOnly)) { // 旧配置存在时保留设备令牌并迁移部署字段。
+            QJsonParseError oldError; // 保存旧配置解析结果。
+            const auto oldDocument = QJsonDocument::fromJson(existing.readAll(), &oldError); // 读取旧配置内容。
+            if (oldError.error == QJsonParseError::NoError && oldDocument.isObject()) { // 只有有效对象才执行迁移。
+                auto migrated = oldDocument.object(); // 复制旧设备列表和其他已知字段。
+                migrated.insert("listen", "0.0.0.0"); // 服务器必须接受局域网和公网连接。
+                migrated.insert("port", 62843); // 统一使用路由器映射的固定端口。
+                migrated.insert("allow_insecure_lan", true); // 兼容当前明文测试链路。
+                migrated.insert("lan_address", migrated.value("lan_address").toString("192.168.3.63")); // 补齐局域网地址。
+                migrated.insert("public_address", migrated.value("public_address").toString("112.26.74.220")); // 补齐公网地址。
+                QSaveFile file(configPath); // 以原子方式写回迁移后的配置。
+                if (!file.open(QIODevice::WriteOnly)
+                    || file.write(QJsonDocument(migrated).toJson(QJsonDocument::Indented)) < 0
+                    || !file.commit()) { // 迁移失败时阻止服务端继续使用不明确配置。
+                    error << "Cannot migrate automatic configuration.\n"; return 1;
+                }
             }
         }
     }
@@ -83,8 +101,8 @@ int main(int argc, char** argv)
         error << "Invalid configuration JSON.\n"; return 1;
     }
     const auto config = document.object();
-    const QHostAddress address(config.value("listen").toString("127.0.0.1"));
-    const auto portValue = config.value("port").toDouble(automatic ? 0 : 17890);
+    const QHostAddress address(config.value("listen").toString("0.0.0.0")); // 默认绑定所有网卡。
+    const auto portValue = config.value("port").toDouble(automatic ? 62843 : 17890); // 自动模式固定公网端口。
     const bool allowInsecureLan = config.value("allow_insecure_lan").toBool(false);
     if (address.isNull() || portValue < 0 || portValue > 65535 || portValue != int(portValue)) {
         error << "Invalid listen address or port.\n"; return 1;
@@ -128,47 +146,34 @@ int main(int argc, char** argv)
                        allowInsecureLan)) {
         error << server.errorString() << '\n'; return 1;
     }
-    if (automatic) {
+    if (automatic) { // 自动生成实际部署所需的局域网和公网客户端配置。
         const auto directory = QFileInfo(configPath).absoluteDir();
-        QString clientHost = QStringLiteral("127.0.0.1");
-        if (lanMode || allowInsecureLan) {
-            for (const auto& interface : QNetworkInterface::allInterfaces()) {
-                if (!(interface.flags() & QNetworkInterface::IsUp)
-                    || !(interface.flags() & QNetworkInterface::IsRunning)
-                    || (interface.flags() & QNetworkInterface::IsLoopBack)) continue;
-                for (const auto& entry : interface.addressEntries()) {
-                    const auto candidate = entry.ip();
-                    if (candidate.protocol() != QAbstractSocket::IPv4Protocol
-                        || candidate.isLoopback() || candidate.toString().startsWith("169.254.")) continue;
-                    clientHost = candidate.toString();
-                    break;
-                }
-                if (clientHost != QStringLiteral("127.0.0.1")) break;
-            }
-        }
-        const auto serverUrl = QStringLiteral("%1://%2:%3")
-            .arg(secure ? QStringLiteral("wss") : QStringLiteral("ws"), clientHost)
-            .arg(server.port());
+        const auto lanHost = config.value("lan_address").toString("192.168.3.63"); // 读取固定局域网入口。
+        const auto publicHost = config.value("public_address").toString("112.26.74.220"); // 读取固定公网入口。
         const auto devices = config.value("devices").toArray();
         for (const auto& value : devices) {
             const auto device = value.toObject();
             const auto id = device.value("id").toString();
             if (id.isEmpty()) continue;
-            QSaveFile clientFile(directory.filePath(QStringLiteral("client-%1.json").arg(id)));
-            if (!clientFile.open(QIODevice::WriteOnly)) continue;
-            const QJsonObject client{{"server", serverUrl}, {"device_id", id},
-                                     {"token", device.value("token").toString()},
-                                     {"allow_insecure_lan", allowInsecureLan}};
-            clientFile.write(QJsonDocument(client).toJson(QJsonDocument::Indented));
-            clientFile.commit();
+            const auto writeClient = [&](const QString& host, const QString& suffix) { // 为一个设备生成指定网络入口配置。
+                QSaveFile clientFile(directory.filePath(QStringLiteral("client-%1%2.json").arg(id, suffix))); // 输出可直接复制的配置文件。
+                if (!clientFile.open(QIODevice::WriteOnly)) return false; // 无法写入时让调用方记录失败。
+                const auto serverUrl = QStringLiteral("%1://%2:%3")
+                    .arg(secure ? QStringLiteral("wss") : QStringLiteral("ws"), host)
+                    .arg(server.port()); // 使用实际监听端口生成客户端入口。
+                const QJsonObject client{{"server", serverUrl}, {"device_id", id},
+                                         {"token", device.value("token").toString()},
+                                         {"allow_insecure_lan", allowInsecureLan}}; // 每台设备保留独立令牌。
+                return clientFile.write(QJsonDocument(client).toJson(QJsonDocument::Indented)) >= 0
+                    && clientFile.commit(); // 原子写入，避免复制半个配置文件。
+            };
+            if (!writeClient(publicHost, QStringLiteral(""))
+                || !writeClient(lanHost, QStringLiteral("-lan"))) { // 公网默认文件和局域网备用文件都必须生成。
+                error << "Cannot write client configuration for " << id << ".\n"; return 1;
+            }
         }
         output << "Automatic configuration: " << configPath << Qt::endl;
-        if (allowInsecureLan) {
-            output << "LAN test mode: plain WebSocket is enabled explicitly; use only on a trusted private network." << Qt::endl;
-            output << "Copy client-device-*.json beside FSRemoteMessages.exe on each test computer." << Qt::endl;
-        } else {
-            output << "Automatic mode is local-only (127.0.0.1); configure WSS for LAN clients." << Qt::endl;
-        }
+        output << "Copy client-device-*.json for public access, or client-device-*-lan.json for LAN access." << Qt::endl; // 明确两种实际部署入口。
     }
     output << "Listening " << (secure ? "wss://" : "ws://") << address.toString()
            << ':' << server.port() << Qt::endl;

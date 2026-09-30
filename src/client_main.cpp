@@ -26,10 +26,10 @@ int main(int argc, char** argv)
     const bool automatic = !parser.isSet("config");
     if (automatic) {
         const auto directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        configPath = QDir(directory).filePath("client-device-a.json");
+        configPath = QDir(directory).filePath("client-device-a.json"); // 默认读取服务器生成的公网实际配置。
         if (!QFile::exists(configPath)) {
             const auto besideExecutable = QDir(QCoreApplication::applicationDirPath())
-                .filePath("client-device-a.json");
+                .filePath("client-device-a.json"); // 也支持从程序目录直接复制服务器生成的配置。
             if (QFile::exists(besideExecutable)) configPath = besideExecutable;
         }
     }
