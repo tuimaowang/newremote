@@ -21,7 +21,7 @@
 #include <windows.h> // 调用 Windows 控制台 API，切换输出代码页为 UTF-8。
 #endif
 
-// 启动消息服务端；自动模式迁移配置时先释放读取句柄，保存失败则报告具体原因并退出。
+// 启动消息服务端；自动配置安全生成或迁移，并在监听前恢复注册身份，文件失败时报告中文原因并退出。
 int main(int argc, char** argv)
 {
     // 创建无窗口的 Qt 应用对象；它负责初始化 Qt，并在末尾提供网络事件循环。
@@ -30,7 +30,7 @@ int main(int argc, char** argv)
     // Windows 控制台默认可能使用 GBK；切换为 UTF-8，避免中文日志显示为乱码。
     SetConsoleOutputCP(CP_UTF8);
 #endif
-    // 服务端和客户端必须使用相同的组织名与应用名，才能定位同一个用户配置目录。
+    // 组织名与应用名决定当前电脑的用户配置目录；客户端与服务端在该目录中使用各自的文件。
     app.setApplicationName("FSRemoteMessages"); // 设置应用名，参与 AppDataLocation 路径计算。
     app.setOrganizationName("FSRemote"); // 设置组织名，参与 AppDataLocation 路径计算。
     app.setApplicationVersion("0.1.0"); // 设置 --version 输出的版本号。
@@ -78,6 +78,7 @@ int main(int argc, char** argv)
             const QJsonObject generated{
                 {"listen", "0.0.0.0"}, {"port", 62843}, // 固定 iKuai 映射端口，避免客户端拿到随机本机端口。
                 {"allow_insecure_lan", true}, // 当前公网测试仍使用明文 WS，正式部署再切换 WSS。
+                {"allow_registration", true}, // 新电脑首次连接时自动登记独立身份。
                 {"lan_address", "192.168.3.63"}, // 生成局域网客户端配置使用的服务器地址。
                 {"public_address", "112.26.74.220"}, // 生成公网客户端配置使用的服务器地址。
                 {"devices", QJsonArray{
@@ -181,6 +182,15 @@ int main(int argc, char** argv)
     }
     // 创建消息服务对象；credentials 会用于校验设备连接时提交的身份令牌。
     MessageServer server(credentials);
+    const bool kaiFangZhuCe = config.value("allow_registration").toBool(true); // 默认按用户要求允许所有新客户端自动加入。
+    if (kaiFangZhuCe) { // 关闭该选项时保留原固定名单部署方式。
+        const auto jiLuLuJing = QFileInfo(configPath).absoluteDir().filePath(QStringLiteral("registered-devices.json")); // 注册记录与当前服务端配置放在同一目录。
+        if (!server.qiYongZhuCe(jiLuLuJing)) { // 启动前加载旧注册记录，损坏文件不能当作空名单。
+            error << QStringLiteral("无法加载设备注册记录：") << server.errorString() << Qt::endl; // 明确报告中文加载错误。
+            return 1; // 不在身份库损坏的情况下开始监听。
+        }
+        output << QStringLiteral("自动注册已开放；设备记录：") << jiLuLuJing << Qt::endl; // 指出服务端实际使用的永久记录位置。
+    }
     // 将 MessageServer 的活动信号连接到标准输出，实时显示连接和消息日志。
     QObject::connect(&server, &MessageServer::activity, &app, [&output](const QString& message) {
         output << message << Qt::endl; // 写入日志并立即刷新，便于在控制台实时观察服务状态。
@@ -224,7 +234,8 @@ int main(int argc, char** argv)
             }
         }
         output << QStringLiteral("自动配置：") << configPath << Qt::endl; // 使用中文说明自动配置文件位置。
-        output << QStringLiteral("公网请复制 client-device-*.json；局域网请复制 client-device-*-lan.json。") << Qt::endl; // 使用中文明确两种实际部署入口。
+        if (kaiFangZhuCe) output << QStringLiteral("新版客户端启动后自动注册，无需复制客户端配置。") << Qt::endl; // 开放模式明确说明新的使用方式。
+        else output << QStringLiteral("固定名单模式：公网使用 client-device-*.json，局域网使用 client-device-*-lan.json。") << Qt::endl; // 关闭注册时仍支持旧式配置。
     }
     // 输出最终入口；0.0.0.0 表示绑定所有本机网卡，具体端口由 server.port() 返回。
     output << QStringLiteral("正在监听 ")

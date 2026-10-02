@@ -1,5 +1,7 @@
 #include "main_window.h"
 #include "protocol.h"
+#include "keHuDuanPeiZhi.h" // 连接设置确认后保存本机身份与入口。
+#include <QCheckBox> // 让连接设置明确显示是否使用自动注册。
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -14,12 +16,13 @@
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QStringList> // 将备用服务器地址转换为分号分隔的可编辑文字。
 #include <QTextBrowser>
 #include <QTextEdit>
 #include <QToolButton>
 #include <QVBoxLayout>
 
-// 构建公共聊天室界面；设备列表只展示成员，发送无需选择目标。
+// 构建公共聊天室，并同步自动注册后的身份和实际连接入口；发送仍无需选择成员。
 MainWindow::MainWindow(ClientProfile profile, QWidget* parent)
     : QMainWindow(parent), profile_(std::move(profile)), client_(this)
 {
@@ -221,6 +224,17 @@ MainWindow::MainWindow(ClientProfile profile, QWidget* parent)
         error_->show();
     });
     connect(&client_, &MessageClient::devicesChanged, this, &MainWindow::updateDevices);
+    connect(&client_, &MessageClient::peiZhiGengXin, this, [this](const ClientProfile& xinPeiZhi) { // 网络层成功连接或恢复身份时更新窗口缓存。
+        if (profile_.deviceId != xinPeiZhi.deviceId) { // 新身份不能继续冒用旧身份的本地聊天状态。
+            history_.clear(); names_.clear(); drafts_.clear(); // 清空旧身份对应的历史和显示名称。
+            input_->clear(); // 避免把旧身份的草稿误发为新身份消息。
+        }
+        profile_ = xinPeiZhi; // 下一次点击连接使用当前独立身份和成功入口。
+        self_->setText(profile_.deviceId); // 显示真实设备 ID，成员列表到达后补充名称。
+        server_->setText(profile_.server.toString()); // 底部不再一直显示已经失败的旧入口。
+        server_->setToolTip(profile_.server.toString()); // 鼠标悬停时显示完整地址。
+        renderMessages(); // 身份变化后刷新聊天显示，地址切换不清除同一身份的历史。
+    });
     connect(&client_, &MessageClient::incoming, this,
         [this](const QString& id, const QString& from, const QString& text) {
             append(from, {id, text, QStringLiteral("已收到"), QDateTime::currentDateTime(), false});
@@ -248,7 +262,7 @@ void MainWindow::connectToServer()
     client_.start(profile_);
 }
 
-// 编辑服务器和设备凭据，切换身份时清除原房间历史。
+// 编辑主备用入口、自动注册模式和设备凭据；先保存，再连接，切换身份清除旧历史。
 void MainWindow::editConnection()
 {
     QDialog dialog(this);
@@ -259,13 +273,25 @@ void MainWindow::editConnection()
     auto* address = new QLineEdit(profile_.server.toString());
     auto* deviceId = new QLineEdit(profile_.deviceId);
     auto* token = new QLineEdit(profile_.token);
+    auto* beiYong = new QLineEdit; // 编辑自动连接的备用入口，多个地址用分号分隔。
+    QStringList diZhiWenZi; // 将 Qt URL 列表转换为可见字符串。
+    for (const auto& diZhi : profile_.beiYongDiZhi) diZhiWenZi.append(diZhi.toString()); // 保留当前候选顺序。
+    beiYong->setText(diZhiWenZi.join(';')); // 用户可以修改或删除内置入口。
+    beiYong->setMaxLength(2048); // 限制输入大小，最终地址数量还会继续校验。
+    auto* sheBeiMing = new QLineEdit(profile_.sheBeiMing.isEmpty() ? QStringLiteral("新设备") : profile_.sheBeiMing); // 新设备名称可以由用户调整。
+    sheBeiMing->setMaxLength(80); // 名称长度与服务端登记限制一致。
+    auto* ziDong = new QCheckBox(QStringLiteral("自动注册设备")); // 公开接入模式明确展示给用户。
+    ziDong->setChecked(profile_.ziDongZhuCe); // 继承当前连接模式，而不是修改后意外退回固定名单。
     address->setMaxLength(512);
     deviceId->setMaxLength(80);
     token->setMaxLength(256);
     token->setEchoMode(QLineEdit::Password);
     form->addRow(QStringLiteral("服务器"), address);
+    form->addRow(QStringLiteral("备用服务器"), beiYong); // 留空表示仅尝试主入口。
+    form->addRow(QStringLiteral("设备名称"), sheBeiMing); // 成员列表使用此名称。
     form->addRow(QStringLiteral("设备 ID"), deviceId);
     form->addRow(QStringLiteral("访问令牌"), token);
+    form->addRow(QStringLiteral("接入方式"), ziDong); // 用户可继续选择已有手动凭据模式。
     layout->addLayout(form);
     auto* validation = new QLabel;
     validation->setWordWrap(true);
@@ -277,10 +303,19 @@ void MainWindow::editConnection()
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        ClientProfile next{QUrl(address->text().trimmed()), deviceId->text().trimmed(), token->text(),
-                           profile_.allowInsecureLan};
+        ClientProfile next{QUrl(address->text().trimmed()), deviceId->text().trimmed(), token->text(), // 按输入读取服务器和身份。
+                           profile_.allowInsecureLan}; // 不改变当前传输权限选项。
+        next.ziDongZhuCe = ziDong->isChecked(); // 保存用户选择的登记模式。
+        next.sheBeiMing = sheBeiMing->text().trimmed(); // 名称去除首尾空格后校验。
+        next.peiZhiLuJing = profile_.peiZhiLuJing; // 自动模式仍写回本机身份文件，手动文件保持只读。
+        for (const auto& diZhi : beiYong->text().split(';', Qt::SkipEmptyParts)) { // 分号分隔每个备用入口。
+            const QUrl wangZhi(diZhi.trimmed()); // 去除粘贴时的空格。
+            if (wangZhi != next.server && !next.beiYongDiZhi.contains(wangZhi)) next.beiYongDiZhi.append(wangZhi); // 主地址和重复项不进入重连列表。
+        }
         const auto error = MessageClient::validate(next);
         if (!error.isEmpty()) { validation->setText(error); return; }
+        QString baoCunCuoWu; // 文件错误展示在设置窗口，不丢失用户输入。
+        if (!KeHuDuanPeiZhi::baoCun(next, &baoCunCuoWu)) { validation->setText(baoCunCuoWu); return; } // 成功保存后才改变运行中的连接。
         const bool differentIdentity = next.deviceId != profile_.deviceId || next.server != profile_.server;
         client_.stop();
         if (differentIdentity) { // 切换账号或服务器时丢弃旧房间历史。

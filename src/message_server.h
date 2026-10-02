@@ -1,4 +1,5 @@
 #pragma once
+#include "sheBeiZhuCe.h" // 设备凭据和永久注册记录由独立模块管理。
 #include <QElapsedTimer>
 #include <QHash>
 #include <QHostAddress>
@@ -13,11 +14,6 @@
 #include <memory>
 
 class QWebSocket;
-struct DeviceCredential {
-    QString id;
-    QString name;
-    QString token;
-};
 
 class MessageServer final : public QObject {
     Q_OBJECT
@@ -30,6 +26,8 @@ public:
     quint16 port() const;
     QString errorString() const;
     void stop();
+    // 在监听前加载永久身份库；空路径保持只允许预设设备的旧模式。
+    bool qiYongZhuCe(const QString& luJing); // 服务端入口明确决定是否开放自动注册。
 signals:
     void activity(const QString& text);
 private:
@@ -59,6 +57,7 @@ private:
     void fenFaLiaoTian(); // 按入队顺序广播公共聊天室消息。
     void tick();
     QList<DeviceCredential> credentials_;
+    SheBeiZhuCe zhuCeBiao_; // 同时查询原有固定身份和重启后恢复的新身份。
     std::unique_ptr<QWebSocketServer> server_;
     QHash<QWebSocket*, Peer> peers_;
     QHash<QString, QWebSocket*> online_;

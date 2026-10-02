@@ -10,6 +10,8 @@ if(MSVC)
 endif()
 add_library(message_core
     src/protocol.h
+    src/keHuDuanPeiZhi.h src/keHuDuanPeiZhi.cpp # 客户端本机身份和内外网入口的文件读写。
+    src/sheBeiZhuCe.h src/sheBeiZhuCe.cpp # 服务端设备登记、身份校验和永久保存。
     src/message_server.h src/message_server.cpp
     src/message_client.h src/message_client.cpp)
 target_include_directories(message_core PUBLIC src)

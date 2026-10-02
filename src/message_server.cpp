@@ -13,6 +13,7 @@ MessageServer::MessageServer(QList<DeviceCredential> credentials, QObject* paren
 
 MessageServer::~MessageServer() { stop(); }
 
+// 启动监听；开放模式允许没有预设设备，但必须先成功加载永久注册记录。
 bool MessageServer::listen(const QHostAddress& address, quint16 port,
                            const QSslConfiguration* tls, bool allowInsecureLan)
 {
@@ -22,22 +23,10 @@ bool MessageServer::listen(const QHostAddress& address, quint16 port,
         error_ = QStringLiteral("明文 WebSocket 仅允许回环地址；如需局域网访问，请配置 TLS。"); // 说明明文连接的安全限制和解决方式。
         return false;
     }
-    QSet<QString> ids;
-    QSet<QString> tokens;
-    for (const auto& credential : credentials_) {
-        if (!protocol::validId(credential.id) || credential.name.trimmed().isEmpty()
-            || credential.name.size() > 80 || credential.token.size() < 32
-            || credential.token.size() > 256 || ids.contains(credential.id)
-            || tokens.contains(credential.token)) {
-            error_ = QStringLiteral("设备凭据无效或重复。"); // 说明设备 ID、名称或令牌校验失败。
-            return false;
-        }
-        ids.insert(credential.id);
-        tokens.insert(credential.token);
-    }
-    if (credentials_.isEmpty() || credentials_.size() > 32) {
-        error_ = QStringLiteral("设备数量必须在 1 到 32 台之间。"); // 说明服务端允许的设备数量范围。
-        return false;
+    if (!zhuCeBiao_.kaiFang() && !zhuCeBiao_.duQu(credentials_, {}, &error_)) return false; // 固定模式也通过注册模块校验全部预设凭据。
+    if (!zhuCeBiao_.kaiFang() && (credentials_.isEmpty() || credentials_.size() > 32)) { // 只对旧固定名单保留原数量要求。
+        error_ = QStringLiteral("固定名单模式的设备数量必须在 1 到 32 台之间。"); // 动态注册不受累计 32 台限制。
+        return false; // 空名单的固定模式没有任何可登录身份。
     }
     server_ = std::make_unique<QWebSocketServer>(QStringLiteral("FSRemote Messages"),
         tls ? QWebSocketServer::SecureMode : QWebSocketServer::NonSecureMode);
@@ -51,6 +40,16 @@ bool MessageServer::listen(const QHostAddress& address, quint16 port,
     }
     timer_.start();
     return true;
+}
+
+// 在监听前加载身份库；注册文件损坏或不可读时明确拒绝启用。
+bool MessageServer::qiYongZhuCe(const QString& luJing)
+{
+    if (server_) { // 运行中不能用另一份注册表替换在线身份。
+        error_ = QStringLiteral("请在启动监听之前设置设备注册记录。"); // 明确说明调用顺序要求。
+        return false; // 保留当前在线会话和身份库。
+    }
+    return zhuCeBiao_.duQu(credentials_, luJing, &error_); // 注册模块负责完整校验并恢复动态设备。
 }
 
 quint16 MessageServer::port() const { return server_ ? server_->serverPort() : 0; }
@@ -140,12 +139,28 @@ void MessageServer::fail(QWebSocket* socket, const QString& requestId, const QSt
     reply(socket, QStringLiteral("error"), requestId, {{"code", code}});
 }
 
+// 生成成员列表：在线设备优先，最多 32 条；特殊名称按序列化字节限制显示长度，确保客户端能够接收。
 QJsonArray MessageServer::roster() const
 {
     QJsonArray devices;
-    for (const auto& credential : credentials_) {
-        devices.append(QJsonObject{{"id", credential.id}, {"name", credential.name},
-                                  {"online", online_.contains(credential.id)}});
+    QSet<QString> xianShi; // 大量历史注册记录不全部广播，避免成员消息超过协议上限。
+    for (auto it = online_.cbegin(); it != online_.cend(); ++it) xianShi.insert(it.key()); // 最多 32 个在线身份必须全部展示。
+    for (const auto& credential : credentials_) { // 兼容原先固定名单的离线成员展示。
+        if (xianShi.size() >= 32) break; // 单次成员广播最多 32 条。
+        xianShi.insert(credential.id); // 未在线的预设身份填补剩余位置。
+    }
+    for (const auto& credential : zhuCeBiao_.sheBei()) { // 保留登记顺序，旧客户端列表行为仍然稳定。
+        if (!xianShi.contains(credential.id)) continue; // 自动注册的历史离线身份不占成员消息空间。
+        QJsonObject chengYuan{{"id", credential.id}, {"name", credential.name}, // 身份完整保留，名称通常也完整显示。
+                             {"online", online_.contains(credential.id)}}; // 在线状态来自服务端绑定的连接。
+        QString xianShiMing = credential.name; // 仅缩短发送副本，不改变磁盘中的原名称。
+        constexpr int danTiaoShangXian = (protocol::maxWireBytes - 512) / 32; // 预留消息头、关联 ID 和数组分隔符空间。
+        while (protocol::encode(chengYuan).toUtf8().size() > danTiaoShangXian && !xianShiMing.isEmpty()) { // 控制字符的 JSON 转义也计入实际字节数。
+            xianShiMing.chop(1); // 每次从末尾缩短一个 UTF-16 单元直到成员记录可发送。
+            if (!xianShiMing.isEmpty() && xianShiMing.back().isHighSurrogate()) xianShiMing.chop(1); // 不把代理对字符截成半个字符。
+            chengYuan.insert("name", xianShiMing); // 更新发送副本后重新检查实际序列化大小。
+        }
+        devices.append(chengYuan); // 所有在线身份都能出现在同一份不超过 16 KiB 的名单中。
     }
     return devices;
 }
@@ -176,7 +191,7 @@ void MessageServer::fenFaLiaoTian()
     }
 }
 
-// 校验认证连接的请求；聊天室文本先入有界队列，再由事件循环分发。
+// 校验登录或自动登记请求；登记必须保存成功才上线，聊天仍按原队列顺序分发。
 void MessageServer::receive(QWebSocket* socket, const QString& text)
 {
     if (!peers_.contains(socket)) return;
@@ -203,28 +218,31 @@ void MessageServer::receive(QWebSocket* socket, const QString& text)
     }
     peer.requests.insert(requestId);
     if (peer.deviceId.isEmpty()) {
-        if (type != "auth.login") { fail(socket, requestId, "unauthorized"); return; }
-        const auto deviceId = payload.value("device_id").toString();
-        const auto token = payload.value("token").toString().toUtf8();
-        for (const auto& credential : credentials_) {
-            if (credential.id != deviceId) continue;
-            const auto expected = credential.token.toUtf8();
-            unsigned int different = static_cast<unsigned int>(expected.size() ^ token.size());
-            for (qsizetype i = 0; i < expected.size(); ++i)
-                different |= static_cast<unsigned char>(expected[i])
-                    ^ static_cast<unsigned char>(i < token.size() ? token[i] : 0);
-            if (different != 0) break;
-            if (online_.contains(deviceId)) { fail(socket, requestId, "already_online"); return; }
-            peer.deviceId = deviceId;
-            online_.insert(deviceId, socket);
-            reply(socket, "auth.result", requestId, {{"device_id", deviceId}, {"name", credential.name}});
-            emit activity(QStringLiteral("设备上线：%1").arg(deviceId)); // 使用中文日志记录认证成功的设备。
-            broadcastRoster();
-            return;
+        if (type != "auth.login" && type != "auth.register") { fail(socket, requestId, "unauthorized"); return; } // 未认证时只接受身份请求。
+        const auto deviceId = payload.value("device_id").toString(); // 每个连接绑定客户端独立 ID。
+        const auto token = payload.value("token").toString(); // 令牌只交给注册模块校验。
+        if (type == "auth.register") { // 开放模式允许新设备主动登记。
+            const bool yiDengJi = zhuCeBiao_.chaZhao(deviceId) != nullptr; // 相同身份重试不重复记录登记日志。
+            const auto cuoWu = zhuCeBiao_.dengJi({deviceId, payload.value("name").toString(), token}); // 先原子保存再允许登录。
+            if (!cuoWu.isEmpty()) { // 写入失败、格式错误和身份冲突均不能上线。
+                fail(socket, requestId, cuoWu); // 返回可由客户端翻译的协议错误码。
+                socket->close(QWebSocketProtocol::CloseCodePolicyViolated, cuoWu); // 结束未通过的登记连接。
+                return; // 不进入聊天权限状态。
+            }
+            if (!yiDengJi) emit activity(QStringLiteral("设备注册成功：%1").arg(deviceId)); // 日志不包含令牌。
         }
-        fail(socket, requestId, "auth_failed");
-        socket->close(QWebSocketProtocol::CloseCodePolicyViolated, QStringLiteral("auth_failed"));
-        return;
+        if (!zhuCeBiao_.yanZheng(deviceId, token)) { // 旧身份仍需令牌一致，开放加入不允许冒用身份。
+            fail(socket, requestId, "auth_failed"); // 手动登录也使用同一认证结果。
+            socket->close(QWebSocketProtocol::CloseCodePolicyViolated, QStringLiteral("auth_failed")); // 拒绝错误令牌。
+            return; // 不能广播或发送消息。
+        }
+        if (online_.contains(deviceId)) { fail(socket, requestId, "already_online"); return; } // 防止同一身份同时绑定两个连接。
+        peer.deviceId = deviceId; // 从此消息来源由服务端绑定，客户端不能自行伪造。
+        online_.insert(deviceId, socket); // 登记已认证的在线连接。
+        reply(socket, "auth.result", requestId, {{"device_id", deviceId}, {"name", zhuCeBiao_.chaZhao(deviceId)->name}}); // 回复登录成功，不回传令牌。
+        emit activity(QStringLiteral("设备上线：%1").arg(deviceId)); // 原有中文上线日志继续保留。
+        broadcastRoster(); // 让所有客户端立即看见新成员。
+        return; // 本次身份请求已处理完成。
     }
     if (type == "device.list") {
         reply(socket, "device.list", requestId, {{"devices", roster()}});
