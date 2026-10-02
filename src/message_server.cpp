@@ -19,7 +19,7 @@ bool MessageServer::listen(const QHostAddress& address, quint16 port,
     stop();
     error_.clear();
     if (!tls && !address.isLoopback() && !allowInsecureLan) {
-        error_ = QStringLiteral("Plain WebSocket is restricted to loopback; configure TLS for LAN access.");
+        error_ = QStringLiteral("明文 WebSocket 仅允许回环地址；如需局域网访问，请配置 TLS。"); // 说明明文连接的安全限制和解决方式。
         return false;
     }
     QSet<QString> ids;
@@ -29,14 +29,14 @@ bool MessageServer::listen(const QHostAddress& address, quint16 port,
             || credential.name.size() > 80 || credential.token.size() < 32
             || credential.token.size() > 256 || ids.contains(credential.id)
             || tokens.contains(credential.token)) {
-            error_ = QStringLiteral("Invalid or duplicate device credentials.");
+            error_ = QStringLiteral("设备凭据无效或重复。"); // 说明设备 ID、名称或令牌校验失败。
             return false;
         }
         ids.insert(credential.id);
         tokens.insert(credential.token);
     }
     if (credentials_.isEmpty() || credentials_.size() > 32) {
-        error_ = QStringLiteral("Configure between 1 and 32 devices.");
+        error_ = QStringLiteral("设备数量必须在 1 到 32 台之间。"); // 说明服务端允许的设备数量范围。
         return false;
     }
     server_ = std::make_unique<QWebSocketServer>(QStringLiteral("FSRemote Messages"),
@@ -172,7 +172,7 @@ void MessageServer::fenFaLiaoTian()
         event.insert("at", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)); // 统一服务器时间。
         for (auto* target : online_.values()) send(target, event); // 包括发送者，所有在线设备收到同一事件。
         reply(task.sender, QStringLiteral("chat.accepted"), task.requestId); // 仅表示服务器完成广播排队，不承诺每端已阅读。
-        emit activity(QStringLiteral("chat %1 #%2").arg(senderId).arg(liaoTianXuhao_)); // 日志只显示身份与序号，不记录正文。
+        emit activity(QStringLiteral("聊天室消息：%1 #%2").arg(senderId).arg(liaoTianXuhao_)); // 日志只显示身份与序号，不记录正文。
     }
 }
 
@@ -218,7 +218,7 @@ void MessageServer::receive(QWebSocket* socket, const QString& text)
             peer.deviceId = deviceId;
             online_.insert(deviceId, socket);
             reply(socket, "auth.result", requestId, {{"device_id", deviceId}, {"name", credential.name}});
-            emit activity(QStringLiteral("online %1").arg(deviceId));
+            emit activity(QStringLiteral("设备上线：%1").arg(deviceId)); // 使用中文日志记录认证成功的设备。
             broadcastRoster();
             return;
         }
@@ -281,7 +281,7 @@ void MessageServer::disconnected(QWebSocket* socket)
     const auto deviceId = peers_.take(socket).deviceId;
     if (!deviceId.isEmpty()) {
         online_.remove(deviceId);
-        emit activity(QStringLiteral("offline %1").arg(deviceId));
+        emit activity(QStringLiteral("设备离线：%1").arg(deviceId)); // 使用中文日志记录设备断开连接。
     }
     const auto ids = pending_.keys();
     for (const auto& id : ids) {

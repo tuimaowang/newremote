@@ -45,7 +45,7 @@ int main(int argc, char** argv)
         const auto directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
         // 目录为空表示系统没有提供有效位置；mkpath 会递归创建不存在的目录。
         if (directory.isEmpty() || !QDir().mkpath(directory)) {
-            error << "Cannot create automatic configuration directory.\n";
+            error << QStringLiteral("无法创建自动配置目录。\n"); // 使用中文提示说明自动配置目录创建失败。
             return 1;
         }
         // 将固定文件名拼接到应用数据目录，得到服务端实际使用的配置路径。
@@ -80,7 +80,7 @@ int main(int argc, char** argv)
             if (!file.open(QIODevice::WriteOnly)
                 || file.write(QJsonDocument(generated).toJson(QJsonDocument::Indented)) < 0
                 || !file.commit()) {
-                error << "Cannot write automatic configuration.\n";
+                error << QStringLiteral("无法写入自动配置。\n"); // 使用中文提示说明首次生成配置失败。
                 return 1;
             }
         }
@@ -101,8 +101,8 @@ int main(int argc, char** argv)
                 if (!file.open(QIODevice::WriteOnly)
                     || file.write(QJsonDocument(migrated).toJson(QJsonDocument::Indented)) < 0
                     || !file.commit()) { // 迁移失败时阻止服务端继续使用不明确配置。
-                    error << "Cannot migrate automatic configuration: " << configPath
-                          << ": " << file.errorString() << '\n'; // 输出配置路径及保存错误，区分占用和权限问题。
+                    error << QStringLiteral("无法迁移自动配置：") << configPath
+                          << QStringLiteral("：") << file.errorString() << '\n'; // 使用中文前缀并保留系统底层错误详情。
                     return 1; // 保存失败时退出，避免继续使用未迁移的旧配置。
                 }
             }
@@ -112,14 +112,14 @@ int main(int argc, char** argv)
     QFile file(configPath);
     // 限制配置大小，避免错误路径或异常文件被当作配置无限读取。
     if (!file.open(QIODevice::ReadOnly) || file.size() > 65536) {
-        error << "Cannot read configuration (maximum 64 KiB). Use --config <path>.\n";
+        error << QStringLiteral("无法读取配置（最大 64 KiB）。请使用 --config <路径>。\n"); // 使用中文提示说明读取限制和备用参数。
         return 1;
     }
     QJsonParseError parseError; // 保存 JSON 解析失败位置和错误类型。
     const auto document = QJsonDocument::fromJson(file.readAll(), &parseError); // 将配置文件文本解析为 JSON 文档。
     // 服务端只接受 JSON 对象作为根节点，例如 { "listen": "...", "devices": [...] }。
     if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-        error << "Invalid configuration JSON.\n"; return 1;
+        error << QStringLiteral("配置 JSON 无效。\n"); return 1; // 使用中文提示说明配置格式解析失败。
     }
     const auto config = document.object(); // 取出根 JSON 对象，后续按字段读取配置。
 
@@ -129,7 +129,7 @@ int main(int argc, char** argv)
     const bool allowInsecureLan = config.value("allow_insecure_lan").toBool(false);
     // 地址必须能解析，端口必须是 0 到 65535 的整数；否则启动没有明确的监听目标。
     if (address.isNull() || portValue < 0 || portValue > 65535 || portValue != int(portValue)) {
-        error << "Invalid listen address or port.\n"; return 1;
+        error << QStringLiteral("监听地址或端口无效。\n"); return 1; // 使用中文提示说明网络监听参数不合法。
     }
 
     // 将 JSON 中的 devices 数组转换成 MessageServer 使用的设备凭据列表。
@@ -153,7 +153,7 @@ int main(int argc, char** argv)
         // TLS 必须同时具备证书、私钥、Qt TLS 后端和可读文件。
         if (certificatePath.isEmpty() || keyPath.isEmpty() || !QSslSocket::supportsSsl()
             || !certificateFile.open(QIODevice::ReadOnly) || !keyFile.open(QIODevice::ReadOnly)) {
-            error << "Cannot load TLS certificate/key or TLS backend unavailable.\n"; return 1;
+            error << QStringLiteral("无法加载 TLS 证书或私钥，或 TLS 后端不可用。\n"); return 1; // 使用中文提示说明 TLS 初始化失败。
         }
         const auto certificates = QSslCertificate::fromData(certificateFile.readAll()); // 解析 PEM 证书链。
         const auto keyData = keyFile.readAll(); // 读取私钥原始内容。
@@ -161,7 +161,7 @@ int main(int argc, char** argv)
         if (key.isNull()) key = QSslKey(keyData, QSsl::Ec); // RSA 失败时再按 EC 私钥尝试。
         // 证书为空或私钥无法解析时，不能启动一个看似安全但实际无效的 WSS 服务。
         if (certificates.isEmpty() || key.isNull()) {
-            error << "Invalid PEM certificate or unencrypted RSA/EC private key.\n"; return 1;
+            error << QStringLiteral("PEM 证书无效，或私钥不是未加密的 RSA/EC 私钥。\n"); return 1; // 使用中文提示说明证书或私钥格式错误。
         }
         tls = QSslConfiguration::defaultConfiguration(); // 从 Qt 默认 TLS 参数开始构造服务端配置。
         tls.setLocalCertificateChain(certificates); // 设置服务端向客户端出示的证书链。
@@ -178,7 +178,7 @@ int main(int argc, char** argv)
     // 开始监听；secure 决定是否传入 TLS 配置，allowInsecureLan 控制明文局域网策略。
     if (!server.listen(address, static_cast<quint16>(portValue), secure ? &tls : nullptr,
                        allowInsecureLan)) {
-        error << server.errorString() << '\n'; return 1;
+        error << QStringLiteral("监听失败：") << server.errorString() << '\n'; return 1; // 使用中文前缀并保留 Qt 提供的底层错误详情。
     }
     // 自动模式在服务端成功监听后生成客户端配置，确保配置中的端口与实际监听端口一致。
     if (automatic) { // 自动生成实际部署所需的局域网和公网客户端配置。
@@ -209,14 +209,16 @@ int main(int argc, char** argv)
             };
             if (!writeClient(publicHost, QStringLiteral(""))
                 || !writeClient(lanHost, QStringLiteral("-lan"))) { // 公网默认文件和局域网备用文件都必须生成。
-                error << "Cannot write client configuration for " << id << ".\n"; return 1;
+                error << QStringLiteral("无法为设备 ") << id
+                      << QStringLiteral(" 写入客户端配置。\n"); return 1; // 使用中文提示指出生成失败的具体设备。
             }
         }
-        output << "Automatic configuration: " << configPath << Qt::endl;
-        output << "Copy client-device-*.json for public access, or client-device-*-lan.json for LAN access." << Qt::endl; // 明确两种实际部署入口。
+        output << QStringLiteral("自动配置：") << configPath << Qt::endl; // 使用中文说明自动配置文件位置。
+        output << QStringLiteral("公网请复制 client-device-*.json；局域网请复制 client-device-*-lan.json。") << Qt::endl; // 使用中文明确两种实际部署入口。
     }
     // 输出最终入口；0.0.0.0 表示绑定所有本机网卡，具体端口由 server.port() 返回。
-    output << "Listening " << (secure ? "wss://" : "ws://") << address.toString()
+    output << QStringLiteral("正在监听 ")
+           << (secure ? QStringLiteral("wss://") : QStringLiteral("ws://")) << address.toString()
            << ':' << server.port() << Qt::endl;
     // 进入 Qt 事件循环；从这里开始持续处理 WebSocket 连接、消息和信号。
     return app.exec();
