@@ -17,6 +17,7 @@
 #include <QSslSocket>
 #include <QTextStream>
 
+// 启动消息服务端；自动模式迁移配置时先释放读取句柄，保存失败则报告具体原因并退出。
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -26,10 +27,11 @@ int main(int argc, char** argv)
     app.setOrganizationName("FSRemote");
     app.setApplicationVersion("0.1.0");
     QCommandLineParser parser;
-    parser.setApplicationDescription("Minimal authenticated device-message relay. No remote commands.");
+    parser.setApplicationDescription(
+        QStringLiteral("经过身份验证的设备消息中继服务，不执行远程命令。"));
     parser.addHelpOption();
     parser.addVersionOption();
-    parser.addOption({"config", "Server JSON configuration file.", "path"});
+    parser.addOption({"config", QStringLiteral("服务器 JSON 配置文件路径。"), QStringLiteral("路径")});
     parser.process(app);
     QTextStream output(stdout);
     QTextStream error(stderr);
@@ -74,6 +76,7 @@ int main(int argc, char** argv)
         if (existing.open(QIODevice::ReadOnly)) { // 旧配置存在时保留设备令牌并迁移部署字段。
             QJsonParseError oldError; // 保存旧配置解析结果。
             const auto oldDocument = QJsonDocument::fromJson(existing.readAll(), &oldError); // 读取旧配置内容。
+            existing.close(); // Windows 下原子替换前必须关闭旧文件，避免读取句柄阻止重命名。
             if (oldError.error == QJsonParseError::NoError && oldDocument.isObject()) { // 只有有效对象才执行迁移。
                 auto migrated = oldDocument.object(); // 复制旧设备列表和其他已知字段。
                 migrated.insert("listen", "0.0.0.0"); // 服务器必须接受局域网和公网连接。
@@ -85,7 +88,9 @@ int main(int argc, char** argv)
                 if (!file.open(QIODevice::WriteOnly)
                     || file.write(QJsonDocument(migrated).toJson(QJsonDocument::Indented)) < 0
                     || !file.commit()) { // 迁移失败时阻止服务端继续使用不明确配置。
-                    error << "Cannot migrate automatic configuration.\n"; return 1;
+                    error << "Cannot migrate automatic configuration: " << configPath
+                          << ": " << file.errorString() << '\n'; // 输出配置路径及保存错误，区分占用和权限问题。
+                    return 1; // 保存失败时退出，避免继续使用未迁移的旧配置。
                 }
             }
         }
