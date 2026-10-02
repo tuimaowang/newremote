@@ -15,13 +15,21 @@
 #include <QSslCertificate> // 读取和解析 PEM 格式 TLS 证书。
 #include <QSslKey> // 读取和解析 RSA 或 EC 私钥。
 #include <QSslSocket> // 检查 Qt TLS 能力并提供 TLS 版本常量。
+#include <QStringConverter> // 明确设置 QTextStream 使用 UTF-8 编码。
 #include <QTextStream> // 向标准输出和标准错误输出文本。
+#ifdef Q_OS_WIN
+#include <windows.h> // 调用 Windows 控制台 API，切换输出代码页为 UTF-8。
+#endif
 
 // 启动消息服务端；自动模式迁移配置时先释放读取句柄，保存失败则报告具体原因并退出。
 int main(int argc, char** argv)
 {
     // 创建无窗口的 Qt 应用对象；它负责初始化 Qt，并在末尾提供网络事件循环。
     QCoreApplication app(argc, argv);
+#ifdef Q_OS_WIN
+    // Windows 控制台默认可能使用 GBK；切换为 UTF-8，避免中文日志显示为乱码。
+    SetConsoleOutputCP(CP_UTF8);
+#endif
     // 服务端和客户端必须使用相同的组织名与应用名，才能定位同一个用户配置目录。
     app.setApplicationName("FSRemoteMessages"); // 设置应用名，参与 AppDataLocation 路径计算。
     app.setOrganizationName("FSRemote"); // 设置组织名，参与 AppDataLocation 路径计算。
@@ -35,7 +43,9 @@ int main(int argc, char** argv)
     parser.addOption({"config", QStringLiteral("服务器 JSON 配置文件路径。"), QStringLiteral("路径")}); // 注册可选配置路径。
     parser.process(app); // 读取 argc/argv，并让解析器准备好后续 isSet/value 查询。
     QTextStream output(stdout); // 创建标准输出流，用于输出启动状态和活动日志。
+    output.setEncoding(QStringConverter::Utf8); // 明确按 UTF-8 编码写出正常日志。
     QTextStream error(stderr); // 创建标准错误流，用于输出错误信息。
+    error.setEncoding(QStringConverter::Utf8); // 明确按 UTF-8 编码写出错误日志。
     const bool automatic = !parser.isSet("config"); // 未指定 --config 时进入自动配置模式。
     QString configPath = parser.value("config"); // 读取 --config 的参数；未指定时结果为空。
 
