@@ -7,11 +7,9 @@
 #include <QJsonDocument> // 在 JSON 文本和 Qt JSON 对象之间转换。
 #include <QJsonObject> // 表示 JSON 对象，例如 server.json 的配置主体。
 #include <QJsonArray> // 表示 JSON 数组，例如 devices 设备列表。
-#include <QRandomGenerator> // 生成设备令牌所需的随机数据。
 #include <QStandardPaths> // 获取当前用户的标准应用数据目录。
 #include <QSaveFile> // 以临时文件加原子替换的方式安全保存配置。
 #include <QWebSocketServer> // 提供 WebSocket 服务端相关类型和链接依赖。
-#include <cstring> // 提供 memcpy，用于复制随机数到令牌缓冲区。
 #include <QSslCertificate> // 读取和解析 PEM 格式 TLS 证书。
 #include <QSslKey> // 读取和解析 RSA 或 EC 私钥。
 #include <QSslSocket> // 检查 Qt TLS 能力并提供 TLS 版本常量。
@@ -61,19 +59,8 @@ int main(int argc, char** argv)
         // 将固定文件名拼接到应用数据目录，得到服务端实际使用的配置路径。
         configPath = QDir(directory).filePath("server.json"); // 实际部署只使用一个固定服务器配置。
 
-        // 首次启动没有配置时，先生成默认服务端配置和两个设备身份。
+        // 首次启动没有配置时，只生成服务端参数；设备身份由客户端首次连接时自动登记。
         if (!QFile::exists(configPath)) {
-            // 生成一个独立设备令牌；令牌会写入配置并用于客户端身份认证。
-            auto token = [] {
-                QByteArray bytes(32, Qt::Uninitialized); // 分配 32 字节未初始化缓冲区作为随机令牌原始数据。
-                auto* random = QRandomGenerator::system(); // 获取 Qt 提供的系统随机数生成器。
-                // 每次生成 4 字节随机数，正好填满 32 字节缓冲区。
-                for (int offset = 0; offset < bytes.size(); offset += 4) {
-                    const auto value = random->generate(); // 生成一个 32 位随机值。
-                    std::memcpy(bytes.data() + offset, &value, sizeof(value)); // 将随机值复制到令牌缓冲区。
-                }
-                return QString::fromLatin1(bytes.toBase64()); // Base64 便于把二进制令牌安全写入 JSON 文本。
-            };
             // 组装首次启动使用的 JSON 配置对象；字段名属于配置协议，不能随意翻译。
             const QJsonObject generated{
                 {"listen", "0.0.0.0"}, {"port", 62843}, // 固定 iKuai 映射端口，避免客户端拿到随机本机端口。
@@ -81,10 +68,7 @@ int main(int argc, char** argv)
                 {"allow_registration", true}, // 新电脑首次连接时自动登记独立身份。
                 {"lan_address", "192.168.3.63"}, // 保留部署文档使用的局域网地址字段，不再生成客户端文件。
                 {"public_address", "112.26.74.220"}, // 保留部署文档使用的公网地址字段，不再生成客户端文件。
-                {"devices", QJsonArray{
-                    QJsonObject{{"id", "device-a"}, {"name", "本机 A"}, {"token", token()}},
-                    QJsonObject{{"id", "device-b"}, {"name", "本机 B"}, {"token", token()}}
-                }}
+                {"devices", QJsonArray{}} // 默认从空设备库开始，所有客户端通过自动注册加入。
             };
             // QSaveFile 先写临时文件，commit 成功后才替换目标文件，避免留下半份 JSON。
             QSaveFile file(configPath);
