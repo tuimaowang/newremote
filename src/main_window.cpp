@@ -1,7 +1,6 @@
 #include "main_window.h"
 #include "protocol.h"
 #include "keHuDuanPeiZhi.h" // 连接设置确认后保存本机身份与入口。
-#include <QCheckBox> // 让连接设置明确显示是否使用自动注册。
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -262,7 +261,7 @@ void MainWindow::connectToServer()
     client_.start(profile_);
 }
 
-// 编辑主备用入口、自动注册模式和设备凭据；先保存，再连接，切换身份清除旧历史。
+// 编辑服务器入口和设备名称；身份令牌由本机自动管理，保存成功后再连接。
 void MainWindow::editConnection()
 {
     QDialog dialog(this);
@@ -271,8 +270,6 @@ void MainWindow::editConnection()
     auto* layout = new QVBoxLayout(&dialog);
     auto* form = new QFormLayout;
     auto* address = new QLineEdit(profile_.server.toString());
-    auto* deviceId = new QLineEdit(profile_.deviceId);
-    auto* token = new QLineEdit(profile_.token);
     auto* beiYong = new QLineEdit; // 编辑自动连接的备用入口，多个地址用分号分隔。
     QStringList diZhiWenZi; // 将 Qt URL 列表转换为可见字符串。
     for (const auto& diZhi : profile_.beiYongDiZhi) diZhiWenZi.append(diZhi.toString()); // 保留当前候选顺序。
@@ -280,18 +277,11 @@ void MainWindow::editConnection()
     beiYong->setMaxLength(2048); // 限制输入大小，最终地址数量还会继续校验。
     auto* sheBeiMing = new QLineEdit(profile_.sheBeiMing.isEmpty() ? QStringLiteral("新设备") : profile_.sheBeiMing); // 新设备名称可以由用户调整。
     sheBeiMing->setMaxLength(80); // 名称长度与服务端登记限制一致。
-    auto* ziDong = new QCheckBox(QStringLiteral("自动注册设备")); // 公开接入模式明确展示给用户。
-    ziDong->setChecked(profile_.ziDongZhuCe); // 继承当前连接模式，而不是修改后意外退回固定名单。
     address->setMaxLength(512);
-    deviceId->setMaxLength(80);
-    token->setMaxLength(256);
-    token->setEchoMode(QLineEdit::Password);
     form->addRow(QStringLiteral("服务器"), address);
     form->addRow(QStringLiteral("备用服务器"), beiYong); // 留空表示仅尝试主入口。
     form->addRow(QStringLiteral("设备名称"), sheBeiMing); // 成员列表使用此名称。
-    form->addRow(QStringLiteral("设备 ID"), deviceId);
-    form->addRow(QStringLiteral("访问令牌"), token);
-    form->addRow(QStringLiteral("接入方式"), ziDong); // 用户可继续选择已有手动凭据模式。
+    form->addRow(QStringLiteral("设备身份"), new QLabel(QStringLiteral("由本机自动生成并保存"))); // 防止用户误以为需要手动填写令牌。
     layout->addLayout(form);
     auto* validation = new QLabel;
     validation->setWordWrap(true);
@@ -303,11 +293,10 @@ void MainWindow::editConnection()
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        ClientProfile next{QUrl(address->text().trimmed()), deviceId->text().trimmed(), token->text(), // 按输入读取服务器和身份。
-                           profile_.allowInsecureLan}; // 不改变当前传输权限选项。
-        next.ziDongZhuCe = ziDong->isChecked(); // 保存用户选择的登记模式。
+        ClientProfile next = profile_; // 保留本机自动生成的 ID、令牌和保存路径。
+        next.server = QUrl(address->text().trimmed()); // 只更新用户编辑的主服务器入口。
         next.sheBeiMing = sheBeiMing->text().trimmed(); // 名称去除首尾空格后校验。
-        next.peiZhiLuJing = profile_.peiZhiLuJing; // 自动模式仍写回本机身份文件，手动文件保持只读。
+        next.peiZhiLuJing = profile_.peiZhiLuJing; // 设置页始终写回本机独立身份文件。
         for (const auto& diZhi : beiYong->text().split(';', Qt::SkipEmptyParts)) { // 分号分隔每个备用入口。
             const QUrl wangZhi(diZhi.trimmed()); // 去除粘贴时的空格。
             if (wangZhi != next.server && !next.beiYongDiZhi.contains(wangZhi)) next.beiYongDiZhi.append(wangZhi); // 主地址和重复项不进入重连列表。

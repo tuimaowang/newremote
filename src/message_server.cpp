@@ -218,10 +218,10 @@ void MessageServer::receive(QWebSocket* socket, const QString& text)
     }
     peer.requests.insert(requestId);
     if (peer.deviceId.isEmpty()) {
-        if (type != "auth.login" && type != "auth.register") { fail(socket, requestId, "unauthorized"); return; } // 未认证时只接受身份请求。
+        if (type != "auth.login" && type != "auth.register") { fail(socket, requestId, "unauthorized"); return; } // 服务端保留协议兼容，但客户端只会发送自动登记请求。
         const auto deviceId = payload.value("device_id").toString(); // 每个连接绑定客户端独立 ID。
         const auto token = payload.value("token").toString(); // 令牌只交给注册模块校验。
-        if (type == "auth.register") { // 开放模式允许新设备主动登记。
+        if (type == "auth.register" && zhuCeBiao_.kaiFang()) { // 开放模式允许新设备主动登记；固定名单也由下面的令牌校验兼容新版客户端。
             const bool yiDengJi = zhuCeBiao_.chaZhao(deviceId) != nullptr; // 相同身份重试不重复记录登记日志。
             const auto cuoWu = zhuCeBiao_.dengJi({deviceId, payload.value("name").toString(), token}); // 先原子保存再允许登录。
             if (!cuoWu.isEmpty()) { // 写入失败、格式错误和身份冲突均不能上线。
@@ -232,7 +232,7 @@ void MessageServer::receive(QWebSocket* socket, const QString& text)
             if (!yiDengJi) emit activity(QStringLiteral("设备注册成功：%1").arg(deviceId)); // 日志不包含令牌。
         }
         if (!zhuCeBiao_.yanZheng(deviceId, token)) { // 旧身份仍需令牌一致，开放加入不允许冒用身份。
-            fail(socket, requestId, "auth_failed"); // 手动登录也使用同一认证结果。
+            fail(socket, requestId, "auth_failed"); // 已有身份仍必须通过令牌校验，不能冒用注册身份。
             socket->close(QWebSocketProtocol::CloseCodePolicyViolated, QStringLiteral("auth_failed")); // 拒绝错误令牌。
             return; // 不能广播或发送消息。
         }

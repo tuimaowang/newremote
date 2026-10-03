@@ -8,8 +8,8 @@ public:
     static QString moRenLuJing(); // 使用 Qt 的用户应用数据目录保存配置。
     // 读取本机配置；首次运行自动创建身份，失败时通过错误参数说明原因。
     static bool duQuZiDong(const QString& luJing, ClientProfile* peiZhi, QString* cuoWu); // 路径参数也便于测试隔离真实配置。
-    // 读取用户通过 --config 明确指定的旧式配置，不自动注册或修改该文件。
-    static bool duQuZhiDing(const QString& luJing, ClientProfile* peiZhi, QString* cuoWu); // 保留已有部署的固定身份连接方式。
+    // 读取本机已经保存的身份文件；文件损坏时报告错误，不生成临时身份覆盖原文件。
+    static bool duQuZiFen(const QString& luJing, ClientProfile* peiZhi, QString* cuoWu); // 仅供自动连接流程恢复本机身份。
     // 原子保存身份、备用地址和最近成功的地址；失败时不覆盖原文件。
     static bool baoCun(const ClientProfile& peiZhi, QString* cuoWu); // 保存位置由自动配置的路径字段决定。
     // 生成新的独立身份并先写入磁盘；只有保存成功才更新调用方的参数。

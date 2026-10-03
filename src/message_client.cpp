@@ -3,7 +3,7 @@
 #include "keHuDuanPeiZhi.h" // 保存自动身份和最近成功的服务器入口。
 #include <QHostAddress>
 
-// 初始化网络事件；自动模式登记身份并切换入口，手动模式继续按固定凭据认证。
+// 初始化网络事件；统一登记本机身份并在网络失败时切换备用入口。
 MessageClient::MessageClient(QObject* parent) : QObject(parent)
 {
     clock_.start();
@@ -33,8 +33,8 @@ MessageClient::MessageClient(QObject* parent) : QObject(parent)
         anPaiChongLian(); // 没有断线信号时也能继续尝试，且不会重复切换。
     });
     connect(&socket_, &QWebSocket::connected, this, [this] {
-        emit stateChanged(profile_.ziDongZhuCe ? QStringLiteral("正在登记设备") : QStringLiteral("正在认证"), false); // 界面明确区分自动接入与固定身份登录。
-        const auto request = protocol::message(profile_.ziDongZhuCe ? QStringLiteral("auth.register") : QStringLiteral("auth.login"), // 开放模式允许新设备首次登记。
+        emit stateChanged(QStringLiteral("正在登记设备"), false); // 客户端统一通过自动登记进入服务端。
+        const auto request = protocol::message(QStringLiteral("auth.register"), // 所有客户端首次连接都通过自动登记进入服务端。
             {{"device_id", profile_.deviceId}, {"token", profile_.token}, {"name", profile_.sheBeiMing}}); // 每台电脑提交自己的独立身份。
         authRequest_ = request.value("id").toString(); // 只处理当前请求的认证结果。
         send(request); // 注册与登录共用现有 WebSocket JSON 通道。
@@ -108,7 +108,7 @@ QString MessageClient::validate(const ClientProfile& profile)
     if (!protocol::validId(profile.deviceId)) return QStringLiteral("设备 ID 只能包含字母、数字、下划线和连字符，最长 80 位");
     if (profile.token.size() < 32 || profile.token.size() > 256)
         return QStringLiteral("访问令牌长度应为 32 到 256 位");
-    if (profile.ziDongZhuCe && (profile.sheBeiMing.trimmed().isEmpty() || profile.sheBeiMing.size() > 80)) // 服务端登记必须有可展示的设备名。
+    if (profile.sheBeiMing.trimmed().isEmpty() || profile.sheBeiMing.size() > 80) // 自动登记必须有可展示的设备名。
         return QStringLiteral("自动登记的设备名称不能为空，且最多 80 个字符。"); // 在发请求前解释名称问题。
     return {};
 }
@@ -142,7 +142,7 @@ void MessageClient::anPaiChongLian()
 {
     if (!wanted_ || retry_.isActive()) return; // 用户停止或已有重试时不重复切换。
     deadline_.stop(); // 上一次连接的超时事件不再影响新尝试。
-    if (profile_.ziDongZhuCe && !profile_.beiYongDiZhi.isEmpty()) { // 手动模式仅重试明确指定的地址。
+    if (!profile_.beiYongDiZhi.isEmpty()) { // 自动连接在主入口失败后轮换备用入口。
         const auto yuanDiZhi = profile_.server; // 旧入口留作以后的重试候选。
         profile_.server = profile_.beiYongDiZhi.takeFirst(); // 切到下一个候选入口。
         profile_.beiYongDiZhi.append(yuanDiZhi); // 内外网入口轮流尝试，不永久放弃任何一端。
@@ -247,7 +247,7 @@ void MessageClient::receive(const QString& text)
         const auto code = payload.value("code").toString();
         if (replyId == authRequest_) {
             QString tiShi = QStringLiteral("设备 ID 或访问令牌不正确"); // 默认认证提示也可被更准确的文件错误替换。
-            if (profile_.ziDongZhuCe && code == "auth_failed" && !yiGengHuanShenFen_) { // 自动身份与已有记录冲突时允许新建自己的身份。
+            if (code == "auth_failed" && !yiGengHuanShenFen_) { // 身份冲突时允许自动生成一次新身份后重新登记。
                 QString baoCunCuoWu; // 重新生成前先确保能够保存。
                 if (KeHuDuanPeiZhi::chuangJianShenFen(&profile_, &baoCunCuoWu)) { // 从不要求服务端覆盖旧设备令牌。
                     yiGengHuanShenFen_ = true; // 限制本次任务只能恢复一次，避免无限注册。

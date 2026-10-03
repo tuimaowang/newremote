@@ -15,10 +15,9 @@ struct ClientProfile {
     QString token;
     // LAN demo mode is explicit because plain WebSocket is not encrypted.
     bool allowInsecureLan = false;
-    bool ziDongZhuCe = false; // 自动模式允许登记新身份，手动固定凭据默认不自动登记。
-    QString sheBeiMing; // 首次登记时向服务端提供电脑显示名。
+    QString sheBeiMing = QStringLiteral("新设备"); // 未显式提供名称时仍使用统一的自动登记默认名称。
     QList<QUrl> beiYongDiZhi; // 当前地址失败时按顺序尝试其余入口。
-    QString peiZhiLuJing; // 本机身份保存路径；空路径表示不写磁盘的手动连接。
+    QString peiZhiLuJing; // 本机身份保存路径；正式客户端始终使用该路径保存身份。
 };
 
 class MessageClient final : public QObject {

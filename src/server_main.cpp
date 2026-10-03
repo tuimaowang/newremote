@@ -79,8 +79,8 @@ int main(int argc, char** argv)
                 {"listen", "0.0.0.0"}, {"port", 62843}, // 固定 iKuai 映射端口，避免客户端拿到随机本机端口。
                 {"allow_insecure_lan", true}, // 当前公网测试仍使用明文 WS，正式部署再切换 WSS。
                 {"allow_registration", true}, // 新电脑首次连接时自动登记独立身份。
-                {"lan_address", "192.168.3.63"}, // 生成局域网客户端配置使用的服务器地址。
-                {"public_address", "112.26.74.220"}, // 生成公网客户端配置使用的服务器地址。
+                {"lan_address", "192.168.3.63"}, // 保留部署文档使用的局域网地址字段，不再生成客户端文件。
+                {"public_address", "112.26.74.220"}, // 保留部署文档使用的公网地址字段，不再生成客户端文件。
                 {"devices", QJsonArray{
                     QJsonObject{{"id", "device-a"}, {"name", "本机 A"}, {"token", token()}},
                     QJsonObject{{"id", "device-b"}, {"name", "本机 B"}, {"token", token()}}
@@ -106,8 +106,8 @@ int main(int argc, char** argv)
                 migrated.insert("listen", "0.0.0.0"); // 服务器必须接受局域网和公网连接。
                 migrated.insert("port", 62843); // 统一使用路由器映射的固定端口。
                 migrated.insert("allow_insecure_lan", true); // 兼容当前明文测试链路。
-                migrated.insert("lan_address", migrated.value("lan_address").toString("192.168.3.63")); // 补齐局域网地址。
-                migrated.insert("public_address", migrated.value("public_address").toString("112.26.74.220")); // 补齐公网地址。
+                migrated.insert("lan_address", migrated.value("lan_address").toString("192.168.3.63")); // 补齐兼容用局域网地址字段，但不创建客户端配置。
+                migrated.insert("public_address", migrated.value("public_address").toString("112.26.74.220")); // 补齐兼容用公网地址字段，但不创建客户端配置。
                 QSaveFile file(configPath); // 以原子方式写回迁移后的配置。
                 if (!file.open(QIODevice::WriteOnly)
                     || file.write(QJsonDocument(migrated).toJson(QJsonDocument::Indented)) < 0
@@ -200,42 +200,11 @@ int main(int argc, char** argv)
                        allowInsecureLan)) {
         error << QStringLiteral("监听失败：") << server.errorString() << '\n'; return 1; // 使用中文前缀并保留 Qt 提供的底层错误详情。
     }
-    // 自动模式在服务端成功监听后生成客户端配置，确保配置中的端口与实际监听端口一致。
-    if (automatic) { // 自动生成实际部署所需的局域网和公网客户端配置。
-        const auto directory = QFileInfo(configPath).absoluteDir();
-        const auto lanHost = config.value("lan_address").toString("192.168.3.63"); // 读取固定局域网入口。
-        const auto publicHost = config.value("public_address").toString("112.26.74.220"); // 读取固定公网入口。
-        const auto devices = config.value("devices").toArray();
-        // 每台设备生成一份公网配置和一份局域网配置，令牌与设备一一对应。
-        for (const auto& value : devices) {
-            const auto device = value.toObject();
-            const auto id = device.value("id").toString();
-            if (id.isEmpty()) continue; // 没有设备 ID 就无法生成可用客户端配置，跳过该条记录。
-            const auto writeClient = [&](const QString& host, const QString& suffix) { // 为一个设备生成指定网络入口配置。
-                // 根据设备 ID 和后缀区分公网文件与局域网文件。
-                QSaveFile clientFile(directory.filePath(QStringLiteral("client-%1%2.json").arg(id, suffix))); // 输出可直接复制的配置文件。
-                if (!clientFile.open(QIODevice::WriteOnly)) return false; // 无法写入时让调用方记录失败。
-                // 根据是否启用 TLS 选择 ws 或 wss，并使用 server.port() 获取实际端口。
-                const auto serverUrl = QStringLiteral("%1://%2:%3")
-                    .arg(secure ? QStringLiteral("wss") : QStringLiteral("ws"), host)
-                    .arg(server.port()); // 使用实际监听端口生成客户端入口。
-                // 客户端只需服务器地址、设备 ID、对应令牌和明文局域网策略即可连接。
-                const QJsonObject client{{"server", serverUrl}, {"device_id", id},
-                                         {"token", device.value("token").toString()},
-                                         {"allow_insecure_lan", allowInsecureLan}}; // 每台设备保留独立令牌。
-                // 写完并 commit 成功才认为配置生成成功，避免客户端拿到半份文件。
-                return clientFile.write(QJsonDocument(client).toJson(QJsonDocument::Indented)) >= 0
-                    && clientFile.commit(); // 原子写入，避免复制半个配置文件。
-            };
-            if (!writeClient(publicHost, QStringLiteral(""))
-                || !writeClient(lanHost, QStringLiteral("-lan"))) { // 公网默认文件和局域网备用文件都必须生成。
-                error << QStringLiteral("无法为设备 ") << id
-                      << QStringLiteral(" 写入客户端配置。\n"); return 1; // 使用中文提示指出生成失败的具体设备。
-            }
-        }
+    // 自动模式只输出服务器自身配置，不再生成需要复制给客户端的固定身份文件。
+    if (automatic) { // 新客户端会在本机生成身份并自动登记。
         output << QStringLiteral("自动配置：") << configPath << Qt::endl; // 使用中文说明自动配置文件位置。
         if (kaiFangZhuCe) output << QStringLiteral("新版客户端启动后自动注册，无需复制客户端配置。") << Qt::endl; // 开放模式明确说明新的使用方式。
-        else output << QStringLiteral("固定名单模式：公网使用 client-device-*.json，局域网使用 client-device-*-lan.json。") << Qt::endl; // 关闭注册时仍支持旧式配置。
+        else output << QStringLiteral("当前未开放自动注册；请将 allow_registration 设为 true 后再启动客户端。") << Qt::endl; // 客户端没有固定配置入口。
     }
     // 输出最终入口；0.0.0.0 表示绑定所有本机网卡，具体端口由 server.port() 返回。
     output << QStringLiteral("正在监听 ")

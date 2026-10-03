@@ -110,7 +110,7 @@ private slots:
         QCOMPARE(first.socket.state(), QAbstractSocket::ConnectedState);
     }
 
-    // 验证新电脑自动生成独立身份、身份恢复、入口保存和显式配置的固定登录模式。
+    // 验证新电脑自动生成独立身份、身份恢复和入口保存；客户端不再支持固定配置模式。
     void ziDongPeiZhiBaoCun() // 所有文件限定在 Qt 自动清理的临时目录。
     {
         QTemporaryDir muLu; // 模拟一台没有任何配置的新电脑。
@@ -119,7 +119,7 @@ private slots:
         ClientProfile a; ClientProfile b; // 模拟两台不同客户端。
         QString cuoWu; // 保存配置模块的中文错误。
         QVERIFY(KeHuDuanPeiZhi::duQuZiDong(luJing, &a, &cuoWu)); // 不预先提供 JSON 也能创建身份。
-        QVERIFY(a.ziDongZhuCe && QFile::exists(luJing)); // 自动注册前身份已经永久保存。
+        QVERIFY(!a.deviceId.isEmpty() && !a.token.isEmpty() && QFile::exists(luJing)); // 自动注册前身份已经永久保存。
         QVERIFY(KeHuDuanPeiZhi::duQuZiDong(muLu.filePath("second.json"), &b, &cuoWu)); // 另一台客户端独立生成身份。
         QVERIFY(a.deviceId != b.deviceId && a.token != b.token); // 不允许所有新电脑使用相同身份。
         std::swap(a.server, a.beiYongDiZhi.first()); // 模拟公网成功，下一次启动应优先公网。
@@ -130,9 +130,6 @@ private slots:
         QCOMPARE(huiFu.token, a.token); // 登录凭据保持一致。
         QCOMPARE(huiFu.server, a.server); // 成功地址成为默认入口。
         QCOMPARE(huiFu.beiYongDiZhi, a.beiYongDiZhi); // 另一个入口仍可在失败时使用。
-        ClientProfile shouDong; // 使用 --config 时应保持固定凭据模式。
-        QVERIFY(KeHuDuanPeiZhi::duQuZhiDing(luJing, &shouDong, &cuoWu)); // 读取兼容的 JSON 字段。
-        QVERIFY(!shouDong.ziDongZhuCe && shouDong.peiZhiLuJing.isEmpty()); // 手动文件不会被自动注册或改写。
         QFile sunHuai(muLu.filePath("broken.json")); // 构造损坏配置，验证不能悄悄重置身份。
         QVERIFY(sunHuai.open(QIODevice::WriteOnly)); // 临时文件可写。
         QCOMPARE(sunHuai.write("{"), qint64(1)); // 写入无效 JSON。
@@ -186,7 +183,7 @@ private slots:
         QVERIFY(kaiFang.qiYongZhuCe(luJing)); // 身份库不存在时可以启动，实际登记时检验写权限。
         QVERIFY(kaiFang.listen(QHostAddress::LocalHost, 0)); // 测试服务仅监听本机临时端口。
         ClientProfile peiZhi{QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(kaiFang.port())), "write-fails", tokenA}; // 凭据格式本身合法。
-        peiZhi.ziDongZhuCe = true; peiZhi.sheBeiMing = QStringLiteral("写入测试"); // 明确走自动登记而不是登录。
+        peiZhi.sheBeiMing = QStringLiteral("写入测试"); // 自动登记必须提供可展示的设备名称。
         MessageClient keHuDuan; // 观察真实网络层收到的错误。
         QSignalSpy cuoWu(&keHuDuan, &MessageClient::problem); // 捕获界面应展示的中文文案。
         keHuDuan.start(peiZhi); // 发起登记，服务端不能保存。
@@ -268,7 +265,7 @@ private slots:
         QVERIFY(kaiFang.qiYongZhuCe(jiLu)); // 开放登记，但不放宽原身份校验。
         QVERIFY(kaiFang.listen(QHostAddress::LocalHost, 0)); // 监听本机测试入口。
         ClientProfile peiZhi{QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(kaiFang.port())), "device-a", tokenB}; // 模拟缓存了不匹配的旧令牌。
-        peiZhi.ziDongZhuCe = true; peiZhi.sheBeiMing = QStringLiteral("新电脑"); // 允许自动身份恢复。
+        peiZhi.sheBeiMing = QStringLiteral("新电脑"); // 提供自动登记所需的设备名称。
         peiZhi.peiZhiLuJing = muLu.filePath("client.json"); // 新身份必须先永久保存。
         MessageClient keHuDuan; // 实际客户端处理服务端 auth_failed。
         keHuDuan.start(peiZhi); // 首次登记冲突，然后新建自己的 UUID。
@@ -293,7 +290,7 @@ private slots:
         QVERIFY(kaiFang.qiYongZhuCe(muLu.filePath("devices.json"))); // 服务端身份库本身可以正常写入。
         QVERIFY(kaiFang.listen(QHostAddress::LocalHost, 0)); // 只监听本机测试端口。
         ClientProfile peiZhi{QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(kaiFang.port())), "device-a", tokenB}; // 错误令牌会触发自动身份恢复。
-        peiZhi.ziDongZhuCe = true; peiZhi.sheBeiMing = QStringLiteral("保存失败测试"); // 使用自动登记分支。
+        peiZhi.sheBeiMing = QStringLiteral("保存失败测试"); // 使用统一自动登记流程。
         peiZhi.peiZhiLuJing = zuDang.fileName() + "/client.json"; // 恢复时必须先写入这个不可用路径。
         MessageClient chongTu; // 第一种失败发生在创建新身份阶段。
         QSignalSpy chongTuCuoWu(&chongTu, &MessageClient::problem); // 记录最后实际展示给用户的提示。

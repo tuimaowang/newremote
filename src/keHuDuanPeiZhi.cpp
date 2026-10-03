@@ -17,10 +17,10 @@ QString KeHuDuanPeiZhi::moRenLuJing()
     return muLu.isEmpty() ? QString{} : QDir(muLu).filePath(QStringLiteral("client-identity.json")); // 无有效目录时让调用方报告错误。
 }
 
-// 写入本机配置；未提供保存路径的手动连接或内存测试不产生磁盘文件。
+// 写入本机配置；没有保存路径时仅用于内存测试，不产生磁盘文件。
 bool KeHuDuanPeiZhi::baoCun(const ClientProfile& peiZhi, QString* cuoWu)
 {
-    if (peiZhi.peiZhiLuJing.isEmpty()) return true; // 手动指定配置时保留原有只读语义。
+    if (peiZhi.peiZhiLuJing.isEmpty()) return true; // 内存测试没有持久路径时保持可运行。
     if (!QDir().mkpath(QFileInfo(peiZhi.peiZhiLuJing).absolutePath())) { // 确保首次运行也能创建用户配置目录。
         *cuoWu = QStringLiteral("无法创建客户端身份目录。"); // 明确区分目录权限和服务器认证问题。
         return false; // 不能保存身份时不继续声称注册准备成功。
@@ -30,7 +30,7 @@ bool KeHuDuanPeiZhi::baoCun(const ClientProfile& peiZhi, QString* cuoWu)
     const QJsonObject neiRong{ // 键名是机器可读契约，保持英文不翻译。
         {"server", peiZhi.server.toString()}, {"device_id", peiZhi.deviceId}, // 保存最近使用的入口及本机身份。
         {"token", peiZhi.token}, {"name", peiZhi.sheBeiMing}, // 保存令牌和设备显示名，令牌不写入日志。
-        {"allow_insecure_lan", peiZhi.allowInsecureLan}, {"auto_register", peiZhi.ziDongZhuCe}, // 保留当前部署和接入模式。
+        {"allow_insecure_lan", peiZhi.allowInsecureLan}, // 只保存传输策略，不再保存可切换的接入模式。
         {"fallback_servers", beiYong}}; // 保存备用连接入口。
     QSaveFile wenJian(peiZhi.peiZhiLuJing); // QSaveFile 在 commit 成功前不会替换旧身份。
     const auto ziJie = QJsonDocument(neiRong).toJson(QJsonDocument::Indented); // 缩进便于用户检查配置。
@@ -56,8 +56,8 @@ bool KeHuDuanPeiZhi::chuangJianShenFen(ClientProfile* peiZhi, QString* cuoWu)
     return true; // 下次启动将读取同一身份。
 }
 
-// 读取身份或明确指定的连接文件；配置损坏时报告错误，不悄悄覆盖用户文件。
-bool KeHuDuanPeiZhi::duQuZhiDing(const QString& luJing, ClientProfile* peiZhi, QString* cuoWu)
+// 读取本机身份文件；配置损坏时报告错误，不悄悄覆盖用户文件。
+bool KeHuDuanPeiZhi::duQuZiFen(const QString& luJing, ClientProfile* peiZhi, QString* cuoWu)
 {
     QFile wenJian(luJing); // QFile 负责只读访问已有 JSON。
     if (!wenJian.open(QIODevice::ReadOnly) || wenJian.size() > 16384) { // 限制文件大小，与既有客户端配置一致。
@@ -75,11 +75,11 @@ bool KeHuDuanPeiZhi::duQuZhiDing(const QString& luJing, ClientProfile* peiZhi, Q
     jieGuo.server = QUrl(neiRong.value("server").toString()); // 读取当前连接入口。
     jieGuo.deviceId = neiRong.value("device_id").toString(); // 读取设备身份。
     jieGuo.token = neiRong.value("token").toString(); // 读取令牌，仅用于认证。
-    jieGuo.allowInsecureLan = neiRong.value("allow_insecure_lan").toBool(); // 不擅自放宽手动连接的传输要求。
+    jieGuo.allowInsecureLan = neiRong.value("allow_insecure_lan").toBool(); // 恢复本机保存的明文连接策略。
     jieGuo.sheBeiMing = neiRong.value("name").toString(); // 新配置带有显示名，旧配置可为空。
     *cuoWu = MessageClient::validate(jieGuo); // 复用网络层对地址、ID 和令牌的检查。
     if (!cuoWu->isEmpty()) return false; // 无效配置不能启动连接。
-    *peiZhi = jieGuo; // 手动配置默认关闭自动注册且不保存。
+    *peiZhi = jieGuo; // 将完整身份交给自动连接流程继续使用。
     return true; // 调用方可以按明确指定的身份连接。
 }
 
@@ -95,14 +95,13 @@ bool KeHuDuanPeiZhi::duQuZiDong(const QString& luJing, ClientProfile* peiZhi, QS
         xinPeiZhi.server = QUrl(QStringLiteral("ws://192.168.3.63:62843")); // 优先尝试当前部署的局域网入口。
         xinPeiZhi.beiYongDiZhi = {QUrl(QStringLiteral("ws://112.26.74.220:62843"))}; // 局域网不可达时转公网入口。
         xinPeiZhi.allowInsecureLan = true; // 延续当前部署的 WS 模式，不改变服务端 TLS 配置。
-        xinPeiZhi.ziDongZhuCe = true; // 用户已选择开放加入，新设备自动登记。
         xinPeiZhi.peiZhiLuJing = luJing; // 身份只写在本机用户目录。
         if (!chuangJianShenFen(&xinPeiZhi, cuoWu)) return false; // 注册前先永久保存身份。
         *peiZhi = xinPeiZhi; // 将已保存的参数交给客户端和窗口。
         return true; // 允许立即自动连接。
     }
     ClientProfile jieGuo; // 暂存已保存身份，避免读取失败影响调用方。
-    if (!duQuZhiDing(luJing, &jieGuo, cuoWu)) return false; // 首先检查基础地址和身份。
+    if (!duQuZiFen(luJing, &jieGuo, cuoWu)) return false; // 首先检查基础地址和身份。
     QFile wenJian(luJing); // 读取自动模式额外保存的入口和注册选项。
     if (!wenJian.open(QIODevice::ReadOnly) || wenJian.size() > 16384) { // 再次读取也检查文件状态和大小。
         *cuoWu = QStringLiteral("无法读取本机自动连接配置。"); // 文件变化或权限问题明确报告。
@@ -115,7 +114,6 @@ bool KeHuDuanPeiZhi::duQuZiDong(const QString& luJing, ClientProfile* peiZhi, QS
         return false; // 不自行覆盖旧文件。
     }
     const auto neiRong = wenDang.object(); // 读取保存的自动模式字段。
-    jieGuo.ziDongZhuCe = neiRong.value("auto_register").toBool(true); // 兼容自动配置缺少该字段的情况。
     for (const auto& diZhi : neiRong.value("fallback_servers").toArray()) { // 恢复地址尝试顺序。
         const QUrl beiYong(diZhi.toString()); // 备用地址也必须经过 URL 校验。
         if (beiYong != jieGuo.server && !jieGuo.beiYongDiZhi.contains(beiYong)) jieGuo.beiYongDiZhi.append(beiYong); // 去除主地址和重复项。
