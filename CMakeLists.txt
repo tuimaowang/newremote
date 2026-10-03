@@ -31,3 +31,16 @@ set_tests_properties(messages PROPERTIES TIMEOUT 90)
 # Standalone connectivity probe; does not use device credentials or message storage.
 add_executable(FSRemoteNetworkDemo demo/network_demo.cpp)
 target_link_libraries(FSRemoteNetworkDemo PRIVATE Qt6::Network Qt6::WebSockets)
+
+if(WIN32)
+    # Run on every ALL_BUILD so missing runtime files are restored without relinking.
+    add_custom_target(deploy_qt_runtime ALL
+        COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
+            "--$<IF:$<CONFIG:Debug>,debug,release>"
+            --qtpaths "$<TARGET_FILE:Qt6::qtpaths>"
+            --no-translations --no-system-d3d-compiler --no-opengl-sw
+            "$<TARGET_FILE:FSRemoteMessages>"
+            "$<TARGET_FILE:FSRemoteMessageServer>"
+        DEPENDS FSRemoteMessages FSRemoteMessageServer
+        VERBATIM)
+endif()
