@@ -68,7 +68,6 @@ void MessageServer::stop()
     }
     peers_.clear();
     online_.clear();
-    pending_.clear();
     liaoTianDuilie_.clear(); // 停服时丢弃尚未广播的临时消息。
     liaoTianYipaicheng_ = false; // 下次启动允许重新安排分发。
     server_.reset();
@@ -246,7 +245,7 @@ void MessageServer::receive(QWebSocket* socket, const QString& text)
     }
     if (type == "device.list") {
         reply(socket, "device.list", requestId, {{"devices", roster()}});
-    } else if (type == "chat.send") { // 公共房间与原私聊协议互不干扰。
+    } else if (type == "chat.send") { // 所有文字消息统一进入公共聊天室广播队列。
         const auto body = payload.value("text").toString(); // 只接受纯文本字段。
         if (body.trimmed().isEmpty() || body.size() > protocol::maxTextLength) { fail(socket, requestId, "invalid_text"); return; } // 拒绝空白和超长内容。
         if (liaoTianDuilie_.size() >= 256) { fail(socket, requestId, "busy"); return; } // 队列满时显式失败，不无限占内存。
@@ -255,39 +254,6 @@ void MessageServer::receive(QWebSocket* socket, const QString& text)
             liaoTianYipaicheng_ = true; // 标记已有待执行任务。
             QTimer::singleShot(0, this, &MessageServer::fenFaLiaoTian); // 异步分发，避免收包回调直接广播。
         }
-    } else if (type == "message.send") {
-        const auto targetId = message.value("to").toString();
-        const auto body = payload.value("text").toString();
-        if (body.trimmed().isEmpty() || body.size() > protocol::maxTextLength) {
-            fail(socket, requestId, "invalid_text"); return;
-        }
-        if (targetId == peer.deviceId) { fail(socket, requestId, "self_target"); return; }
-        auto* target = online_.value(targetId, nullptr);
-        if (!target) { fail(socket, requestId, "target_offline"); return; }
-        int outstanding = 0;
-        for (const auto& pending : pending_) if (pending.sender == socket) ++outstanding;
-        if (outstanding >= 16 || pending_.size() >= 256) { fail(socket, requestId, "busy"); return; }
-        auto event = protocol::message("message.deliver", {{"text", body}});
-        event.insert("from", peer.deviceId);
-        event.insert("to", targetId);
-        event.insert("at", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-        const auto deliveryId = event.value("id").toString();
-        pending_.insert(deliveryId, {socket, target, requestId, now + 5000});
-        if (!send(target, event)) {
-            pending_.remove(deliveryId);
-            fail(socket, requestId, "target_unavailable");
-            return;
-        }
-        reply(socket, "message.accepted", requestId);
-    } else if (type == "message.received") {
-        const auto deliveryId = payload.value("message_id").toString();
-        const auto it = pending_.find(deliveryId);
-        if (it == pending_.end() || it->target != socket) {
-            fail(socket, requestId, "invalid_receipt"); return;
-        }
-        const auto pending = *it;
-        pending_.erase(it);
-        reply(pending.sender, "message.received", pending.requestId);
     } else {
         fail(socket, requestId, "unknown_type");
     }
@@ -301,14 +267,6 @@ void MessageServer::disconnected(QWebSocket* socket)
         online_.remove(deviceId);
         emit activity(QStringLiteral("设备离线：%1").arg(deviceId)); // 使用中文日志记录设备断开连接。
     }
-    const auto ids = pending_.keys();
-    for (const auto& id : ids) {
-        const auto pending = pending_.value(id);
-        if (pending.sender == socket || pending.target == socket) {
-            pending_.remove(id);
-            if (pending.sender != socket) fail(pending.sender, pending.requestId, "delivery_unknown");
-        }
-    }
     socket->deleteLater();
     if (!deviceId.isEmpty()) broadcastRoster();
 }
@@ -316,14 +274,6 @@ void MessageServer::disconnected(QWebSocket* socket)
 void MessageServer::tick()
 {
     const auto now = clock_.elapsed();
-    const auto ids = pending_.keys();
-    for (const auto& id : ids) {
-        const auto pending = pending_.value(id);
-        if (now >= pending.expiresAt) {
-            pending_.remove(id);
-            fail(pending.sender, pending.requestId, "delivery_unknown");
-        }
-    }
     const auto sockets = peers_.keys();
     for (auto* socket : sockets) {
         if (!peers_.contains(socket)) continue;

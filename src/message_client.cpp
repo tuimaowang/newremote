@@ -66,13 +66,6 @@ MessageClient::MessageClient(QObject* parent) : QObject(parent)
         const auto now = clock_.elapsed();
         if (now - lastPong_ > 20000) { socket_.abort(); return; }
         socket_.ping();
-        const auto ids = pending_.keys();
-        for (const auto& id : ids) {
-            if (now - pending_.value(id) >= 10000) {
-                pending_.remove(id);
-                emit deliveryChanged(id, QStringLiteral("结果未知"));
-            }
-        }
         const auto chatIds = liaoTianDaifa_.keys(); // 定期检查聊天室未确认请求。
         for (const auto& id : chatIds) { // 避免发送状态一直等待。
             if (now - liaoTianDaifa_.value(id) >= 10000) { // 超过十秒不猜测投递结果。
@@ -167,12 +160,9 @@ void MessageClient::stop()
     emit stateChanged(QStringLiteral("未连接"), false);
 }
 
-// 连接中断时将私聊和聊天室待确认发送统一标为结果未知。
+// 连接中断时将公共聊天室中尚未确认的发送统一标为结果未知。
 void MessageClient::losePending()
 {
-    const auto ids = pending_.keys();
-    pending_.clear();
-    for (const auto& id : ids) emit deliveryChanged(id, QStringLiteral("结果未知"));
     const auto chatIds = liaoTianDaifa_.keys(); // 收集聊天室未完成请求。
     liaoTianDaifa_.clear(); // 断线不自动重发，以免重复展示。
     for (const auto& id : chatIds) emit deliveryChanged(id, QStringLiteral("结果未知")); // 明示不确定状态。
@@ -184,19 +174,6 @@ bool MessageClient::send(const QJsonObject& message)
     if (socket_.state() != QAbstractSocket::ConnectedState
         || socket_.bytesToWrite() > protocol::maxQueuedBytes) return false;
     return socket_.sendTextMessage(protocol::encode(message)) >= 0;
-}
-
-QString MessageClient::sendMessage(const QString& target, const QString& text)
-{
-    if (!online_ || pending_.size() >= 16 || !protocol::validId(target)
-        || target == profile_.deviceId || text.trimmed().isEmpty()
-        || text.size() > protocol::maxTextLength) return {};
-    auto request = protocol::message("message.send", {{"text", text}});
-    request.insert("to", target);
-    const auto id = request.value("id").toString();
-    pending_.insert(id, clock_.elapsed());
-    if (!send(request)) { pending_.remove(id); return {}; }
-    return id;
 }
 
 // 向公共聊天室发送纯文本；成功返回请求 ID，失败返回空串。
@@ -269,9 +246,8 @@ void MessageClient::receive(const QString& text)
             else if (code == "registration_full") tiShi = QStringLiteral("服务端已达到 4096 个注册身份上限。"); // 与同时在线数量区分。
             else if (code == "invalid_credentials") tiShi = QStringLiteral("设备登记信息无效，请检查设备名称和身份配置。"); // 解释格式校验失败。
             emit problem(tiShi); // 所有已知登记错误均使用中文说明。
-        } else if (pending_.remove(replyId) || liaoTianDaifa_.remove(replyId)) { // 两类发送错误均结算。
+        } else if (liaoTianDaifa_.remove(replyId)) { // 公共聊天室发送错误结算。
             const auto status = code == "delivery_unknown" ? QStringLiteral("结果未知")
-                : code == "target_offline" ? QStringLiteral("目标已离线")
                 : QStringLiteral("发送失败：%1").arg(code);
             emit deliveryChanged(replyId, status);
         }
@@ -289,17 +265,5 @@ void MessageClient::receive(const QString& text)
         emit liaoTianDaoDa(id, from, body, sequence, at); // 通知界面渲染。
     } else if (online_ && type == "chat.accepted" && liaoTianDaifa_.remove(replyId)) { // 服务器已广播。
         emit deliveryChanged(replyId, QStringLiteral("服务器已广播")); // 不表示其他用户已阅读。
-    } else if (online_ && type == "message.deliver") {
-        const auto id = message.value("id").toString();
-        const auto from = message.value("from").toString();
-        const auto body = payload.value("text").toString();
-        if (!protocol::validId(from) || message.value("to").toString() != profile_.deviceId
-            || body.size() > protocol::maxTextLength || body.trimmed().isEmpty()) return;
-        emit incoming(id, from, body);
-        send(protocol::message("message.received", {{"message_id", id}}));
-    } else if (online_ && type == "message.accepted" && pending_.contains(replyId)) {
-        emit deliveryChanged(replyId, QStringLiteral("服务器已受理"));
-    } else if (online_ && type == "message.received" && pending_.remove(replyId)) {
-        emit deliveryChanged(replyId, QStringLiteral("目标已收到"));
     }
 }

@@ -21,7 +21,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-// 构建公共聊天室，并同步自动注册后的身份和实际连接入口；发送仍无需选择成员。
+// 构建公共聊天室，并同步自动注册后的身份和实际连接入口；发送始终广播给在线设备。
 MainWindow::MainWindow(ClientProfile profile, QWidget* parent)
     : QMainWindow(parent), profile_(std::move(profile)), client_(this)
 {
@@ -208,7 +208,7 @@ MainWindow::MainWindow(ClientProfile profile, QWidget* parent)
         else if (!MessageClient::validate(profile_).isEmpty()) editConnection();
         else connectToServer();
     });
-    // 成员列表不作为聊天目标；公共房间始终保持选中。
+    // 成员列表只展示在线状态，不作为单独消息目标。
     connect(input_, &QTextEdit::textChanged, this, &MainWindow::updateSendState);
     connect(send_, &QPushButton::clicked, this, &MainWindow::sendMessage);
     connect(&client_, &MessageClient::stateChanged, this, [this](const QString& text, bool online) {
@@ -234,10 +234,6 @@ MainWindow::MainWindow(ClientProfile profile, QWidget* parent)
         server_->setToolTip(profile_.server.toString()); // 鼠标悬停时显示完整地址。
         renderMessages(); // 身份变化后刷新聊天显示，地址切换不清除同一身份的历史。
     });
-    connect(&client_, &MessageClient::incoming, this,
-        [this](const QString& id, const QString& from, const QString& text) {
-            append(from, {id, text, QStringLiteral("已收到"), QDateTime::currentDateTime(), false});
-        });
     connect(&client_, &MessageClient::liaoTianDaoDa, this,
         [this](const QString& id, const QString& from, const QString& text, qint64, const QDateTime& at) { // 展示服务器排序的房间广播。
             if (from == profile_.deviceId) return; // 自己发送的条目已经在本地等待确认。
@@ -350,12 +346,12 @@ void MainWindow::updateDevices(const QJsonArray& devices)
         // 成员不对应单独对话。
     }
     count_->setText(QStringLiteral("%1 在线").arg(connected));
-    // 不自动选择设备，避免误示为私聊。
+    // 不把设备列表选择解释为单独会话，界面始终停留在公共聊天室。
     blocker.unblock();
     selectDevice();
 }
 
-// 保持唯一公共房间为当前会话，成员选择不改变发送目标。
+// 保持唯一公共房间为当前会话，成员列表选择不改变发送目标。
 void MainWindow::selectDevice()
 {
     peerTitle_->setText(QStringLiteral("公共聊天室")); // 列表选择不改变房间。

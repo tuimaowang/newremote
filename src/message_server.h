@@ -39,12 +39,6 @@ private:
         int rateCount = 0;
         QSet<QString> requests;
     };
-    struct Pending {
-        QWebSocket* sender = nullptr;
-        QWebSocket* target = nullptr;
-        QString requestId;
-        qint64 expiresAt = 0;
-    };
     void accept();
     void receive(QWebSocket* socket, const QString& text);
     void disconnected(QWebSocket* socket);
@@ -61,7 +55,6 @@ private:
     std::unique_ptr<QWebSocketServer> server_;
     QHash<QWebSocket*, Peer> peers_;
     QHash<QString, QWebSocket*> online_;
-    QHash<QString, Pending> pending_;
     struct LiaoTianRenWu { QWebSocket* sender; QString requestId; QString text; }; // 保存认证连接与待广播内容。
     QQueue<LiaoTianRenWu> liaoTianDuilie_; // 有界内存队列，不保存离线消息。
     quint64 liaoTianXuhao_ = 0; // 服务器运行期间单调递增的房间序号。

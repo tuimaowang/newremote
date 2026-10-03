@@ -31,12 +31,10 @@ public:
     bool online() const { return online_; }
     bool active() const { return wanted_; }
     const ClientProfile& profile() const { return profile_; }
-    QString sendMessage(const QString& target, const QString& text);
     QString faSongLiaoTian(const QString& text); // 发送公共聊天室文本并返回关联请求 ID。
 signals:
     void stateChanged(const QString& text, bool online);
     void devicesChanged(const QJsonArray& devices);
-    void incoming(const QString& id, const QString& from, const QString& text);
     void liaoTianDaoDa(const QString& requestId, const QString& from, const QString& text,
                       qint64 sequence, const QDateTime& at); // 通知界面显示服务器排序后的消息。
     void deliveryChanged(const QString& id, const QString& state);
@@ -54,7 +52,6 @@ private:
     QTimer deadline_;
     QTimer maintenance_;
     QElapsedTimer clock_;
-    QHash<QString, qint64> pending_;
     QHash<QString, qint64> liaoTianDaifa_; // 等待服务器广播确认的聊天室请求。
     qint64 zuiHouXuhao_ = 0; // 过滤同一连接内的重复或倒序房间事件。
     ClientProfile profile_;

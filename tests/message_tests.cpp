@@ -348,54 +348,6 @@ private slots:
         }
     }
 
-    void relayBindsSenderAndReceipt() {
-        Probe a;
-        Probe b;
-        Probe c;
-        login(a, "device-a", tokenA);
-        login(b, "device-b", tokenB);
-        login(c, "device-c", tokenC);
-        const auto body = QStringLiteral("中文 <script> & \n第二行");
-        auto request = protocol::message("message.send", {{"text", body}});
-        request.insert("from", "device-c");
-        request.insert("to", "device-b");
-        const auto id = request.value("id").toString();
-        a.send(request);
-        QTRY_VERIFY(b.has("message.deliver"));
-        QTRY_VERIFY(a.has("message.accepted", id));
-        const auto delivered = b.last("message.deliver");
-        QCOMPARE(delivered.value("from").toString(), "device-a");
-        QCOMPARE(delivered.value("payload").toObject().value("text").toString(), body);
-        QVERIFY(!a.has("message.received", id));
-        c.send(protocol::message("message.received", {{"message_id", delivered.value("id")}}));
-        QTRY_VERIFY(c.has("error"));
-        QCOMPARE(c.last("error").value("payload").toObject().value("code").toString(), "invalid_receipt");
-        QVERIFY(!a.has("message.received", id));
-        b.send(protocol::message("message.received", {{"message_id", delivered.value("id")}}));
-        QTRY_VERIFY(a.has("message.received", id));
-        a.send(request);
-        QTRY_VERIFY(a.has("error", id));
-        QCOMPARE(a.last("error").value("payload").toObject().value("code").toString(), "duplicate_id");
-        int deliveries = 0;
-        for (const auto& value : b.inbox) if (value.value("type") == "message.deliver") ++deliveries;
-        QCOMPARE(deliveries, 1);
-    }
-
-    void offlineAndOversizedText() {
-        Probe a;
-        login(a, "device-a", tokenA);
-        auto request = protocol::message("message.send", {{"text", "hello"}});
-        request.insert("to", "device-b");
-        a.send(request);
-        QTRY_VERIFY(a.has("error", request.value("id").toString()));
-        QCOMPARE(a.last("error").value("payload").toObject().value("code").toString(), "target_offline");
-        request = protocol::message("message.send", {{"text", QString(4001, 'x')}});
-        request.insert("to", "device-b");
-        a.send(request);
-        QTRY_VERIFY(a.has("error", request.value("id").toString()));
-        QCOMPARE(a.last("error").value("payload").toObject().value("code").toString(), "invalid_text");
-    }
-
     void malformedAndOversizedWireClose() {
         QTest::failOnWarning(QRegularExpression(".*Failed to create a timer.*"));
         Probe a;
@@ -424,59 +376,6 @@ private slots:
         QTRY_VERIFY(!client.active());
         QTRY_COMPARE(peer->state(), QAbstractSocket::UnconnectedState);
         QVERIFY(!problems.isEmpty());
-    }
-
-    void deliveryTimeoutIsUnknown() {
-        Probe a;
-        Probe b;
-        login(a, "device-a", tokenA);
-        login(b, "device-b", tokenB);
-        auto request = protocol::message("message.send", {{"text", "no receipt"}});
-        request.insert("to", "device-b");
-        a.send(request);
-        QTRY_VERIFY(b.has("message.deliver"));
-        QTRY_VERIFY_WITH_TIMEOUT(a.has("error", request.value("id").toString()), 7500);
-        QCOMPARE(a.last("error").value("payload").toObject().value("code").toString(), "delivery_unknown");
-    }
-
-    void targetDisconnectSettlesPending() {
-        Probe a;
-        Probe b;
-        login(a, "device-a", tokenA);
-        login(b, "device-b", tokenB);
-        auto request = protocol::message("message.send", {{"text", "disconnect"}});
-        request.insert("to", "device-b");
-        a.send(request);
-        QTRY_VERIFY(b.has("message.deliver"));
-        b.socket.abort();
-        QTRY_VERIFY(a.has("error", request.value("id").toString()));
-        QCOMPARE(a.last("error").value("payload").toObject().value("code").toString(), "delivery_unknown");
-        QTRY_VERIFY(!a.last("device.list").value("payload").toObject().value("devices").toArray()
-                        .at(1).toObject().value("online").toBool());
-    }
-
-    void clientRoundTripAndReconnect() {
-        MessageClient a;
-        MessageClient b;
-        QSignalSpy incoming(&b, &MessageClient::incoming);
-        QSignalSpy status(&a, &MessageClient::deliveryChanged);
-        a.start({url, "device-a", tokenA});
-        b.start({url, "device-b", tokenB});
-        QTRY_VERIFY(a.online() && b.online());
-        const auto id = a.sendMessage("device-b", QStringLiteral("收到请回复"));
-        QVERIFY(!id.isEmpty());
-        QTRY_COMPARE(incoming.count(), 1);
-        QTRY_COMPARE(status.count(), 2);
-        QCOMPARE(status.last().at(1).toString(), QStringLiteral("目标已收到"));
-        const auto port = server->port();
-        server->stop();
-        QTRY_VERIFY(!a.online() && !b.online());
-        QVERIFY(server->listen(QHostAddress::LocalHost, port));
-        QTRY_VERIFY_WITH_TIMEOUT(a.online() && b.online(), 6000);
-        QCOMPARE(incoming.count(), 1);
-        a.stop();
-        b.stop();
-        QVERIFY(!a.active() && !b.active());
     }
 
     // 验证统一房间对三台在线设备广播、按序编号，且拒绝非法正文与重复请求。
